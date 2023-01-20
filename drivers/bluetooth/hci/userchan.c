@@ -6,11 +6,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr.h>
-#include <device.h>
-#include <init.h>
-#include <sys/util.h>
-#include <sys/byteorder.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/init.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/sys/byteorder.h>
 
 #include <errno.h>
 #include <stddef.h>
@@ -24,13 +24,13 @@
 #include "soc.h"
 #include "cmdline.h" /* native_posix command line options header */
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <drivers/bluetooth/hci_driver.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/drivers/bluetooth/hci_driver.h>
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_DEBUG_HCI_DRIVER)
-#define LOG_MODULE_NAME bt_driver
-#include "common/log.h"
+#define LOG_LEVEL CONFIG_BT_HCI_DRIVER_LOG_LEVEL
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(bt_driver);
 
 #define BTPROTO_HCI      1
 struct sockaddr_hci {
@@ -64,8 +64,7 @@ static struct net_buf *get_rx(const uint8_t *buf)
 	switch (buf[0]) {
 	case H4_EVT:
 		if (buf[1] == BT_HCI_EVT_LE_META_EVENT &&
-		    (buf[3] == BT_HCI_EVT_LE_ADVERTISING_REPORT ||
-		     buf[3] == BT_HCI_EVT_LE_EXT_ADVERTISING_REPORT)) {
+		    (buf[3] == BT_HCI_EVT_LE_ADVERTISING_REPORT)) {
 			discardable = true;
 			timeout = K_NO_WAIT;
 		}
@@ -79,7 +78,7 @@ static struct net_buf *get_rx(const uint8_t *buf)
 		}
 		__fallthrough;
 	default:
-		BT_ERR("Unknown packet type: %u", buf[0]);
+		LOG_ERR("Unknown packet type: %u", buf[0]);
 	}
 
 	return NULL;
@@ -98,11 +97,13 @@ static void rx_thread(void *p1, void *p2, void *p3)
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
 
-	BT_DBG("started");
+	LOG_DBG("started");
 
 	while (1) {
 		static uint8_t frame[512];
 		struct net_buf *buf;
+		size_t buf_tailroom;
+		size_t buf_add_len;
 		ssize_t len;
 
 		if (!uc_ready()) {
@@ -110,7 +111,7 @@ static void rx_thread(void *p1, void *p2, void *p3)
 			continue;
 		}
 
-		BT_DBG("calling read()");
+		LOG_DBG("calling read()");
 
 		len = read(uc_fd, frame, sizeof(frame));
 		if (len < 0) {
@@ -119,7 +120,7 @@ static void rx_thread(void *p1, void *p2, void *p3)
 				continue;
 			}
 
-			BT_ERR("Reading socket failed, errno %d", errno);
+			LOG_ERR("Reading socket failed, errno %d", errno);
 			close(uc_fd);
 			uc_fd = -1;
 			return;
@@ -127,13 +128,21 @@ static void rx_thread(void *p1, void *p2, void *p3)
 
 		buf = get_rx(frame);
 		if (!buf) {
-			BT_DBG("Discard adv report due to insufficient buf");
+			LOG_DBG("Discard adv report due to insufficient buf");
 			continue;
 		}
 
-		net_buf_add_mem(buf, &frame[1], len - 1);
+		buf_tailroom = net_buf_tailroom(buf);
+		buf_add_len = len - 1;
+		if (buf_tailroom < buf_add_len) {
+			LOG_ERR("Not enough space in buffer %zu/%zu", buf_add_len, buf_tailroom);
+			net_buf_unref(buf);
+			continue;
+		}
 
-		BT_DBG("Calling bt_recv(%p)", buf);
+		net_buf_add_mem(buf, &frame[1], buf_add_len);
+
+		LOG_DBG("Calling bt_recv(%p)", buf);
 
 		bt_recv(buf);
 
@@ -143,10 +152,10 @@ static void rx_thread(void *p1, void *p2, void *p3)
 
 static int uc_send(struct net_buf *buf)
 {
-	BT_DBG("buf %p type %u len %u", buf, bt_buf_get_type(buf), buf->len);
+	LOG_DBG("buf %p type %u len %u", buf, bt_buf_get_type(buf), buf->len);
 
 	if (uc_fd < 0) {
-		BT_ERR("User channel not open");
+		LOG_ERR("User channel not open");
 		return -EIO;
 	}
 
@@ -164,7 +173,7 @@ static int uc_send(struct net_buf *buf)
 		}
 		__fallthrough;
 	default:
-		BT_ERR("Unknown buffer type");
+		LOG_ERR("Unknown buffer type");
 		return -EINVAL;
 	}
 
@@ -205,18 +214,18 @@ static int user_chan_open(uint16_t index)
 static int uc_open(void)
 {
 	if (bt_dev_index < 0) {
-		BT_ERR("No Bluetooth device specified");
+		LOG_ERR("No Bluetooth device specified");
 		return -ENODEV;
 	}
 
-	BT_DBG("hci%d", bt_dev_index);
+	LOG_DBG("hci%d", bt_dev_index);
 
 	uc_fd = user_chan_open(bt_dev_index);
 	if (uc_fd < 0) {
 		return uc_fd;
 	}
 
-	BT_DBG("User Channel opened as fd %d", uc_fd);
+	LOG_DBG("User Channel opened as fd %d", uc_fd);
 
 	k_thread_create(&rx_thread_data, rx_thread_stack,
 			K_KERNEL_STACK_SIZEOF(rx_thread_stack),
@@ -224,7 +233,7 @@ static int uc_open(void)
 			K_PRIO_COOP(CONFIG_BT_DRIVER_RX_HIGH_PRIO),
 			0, K_NO_WAIT);
 
-	BT_DBG("returning");
+	LOG_DBG("returning");
 
 	return 0;
 }

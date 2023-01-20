@@ -65,6 +65,10 @@
 	};
 };
 
+&clk_lsi {
+	status = "okay";
+};
+
 &clk_hsi {
 	status = "okay";
 };
@@ -89,10 +93,17 @@
 
 &usart2 {
 	pinctrl-0 = <&usart2_tx_pd5 &usart2_rx_pd6>;
+	pinctrl-names = "default";
 	current-speed = <115200>;
 	status = "okay";
 };
 
 &rtc {
+	clocks = <&rcc STM32_CLOCK_BUS_APB1 0x10000000>,
+		 <&rcc STM32_SRC_LSI RTC_SEL(2)>;
 	status = "okay";
+
+	backup_regs {
+		status = "okay";
+	};
 };

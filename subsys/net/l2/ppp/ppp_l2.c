@@ -4,26 +4,27 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(net_l2_ppp, CONFIG_NET_L2_PPP_LOG_LEVEL);
 
 #include <stdlib.h>
-#include <net/net_core.h>
-#include <net/net_l2.h>
-#include <net/net_if.h>
-#include <net/net_pkt.h>
-#include <net/net_mgmt.h>
+#include <zephyr/net/net_core.h>
+#include <zephyr/net/net_l2.h>
+#include <zephyr/net/net_if.h>
+#include <zephyr/net/net_pkt.h>
+#include <zephyr/net/net_mgmt.h>
 
-#include <net/ppp.h>
+#include <zephyr/net/ppp.h>
 
 #include "net_private.h"
+#include "ipv4_autoconf_internal.h"
 
 #include "ppp_stats.h"
 #include "ppp_internal.h"
 
 static K_FIFO_DEFINE(tx_queue);
 
-#if IS_ENABLED(CONFIG_NET_TC_THREAD_COOPERATIVE)
+#if defined(CONFIG_NET_TC_THREAD_COOPERATIVE)
 /* Lowest priority cooperative thread */
 #define THREAD_PRIORITY K_PRIO_COOP(CONFIG_NUM_COOP_PRIORITIES - 1)
 #else
@@ -190,10 +191,10 @@ static int ppp_send(struct net_if *iface, struct net_pkt *pkt)
 	return ret;
 }
 
-static void ppp_lower_down(struct ppp_context *ctx)
+static void ppp_close(struct ppp_context *ctx)
 {
 	if (ppp_lcp) {
-		ppp_lcp->lower_down(ctx);
+		ppp_lcp->close(ctx, "Shutdown");
 	}
 }
 
@@ -230,7 +231,7 @@ static int ppp_enable(struct net_if *iface, bool state)
 	ctx->is_enabled = state;
 
 	if (!state) {
-		ppp_lower_down(ctx);
+		ppp_close(ctx);
 
 		if (ppp->stop) {
 			ppp->stop(net_if_get_device(iface));
@@ -259,6 +260,14 @@ static enum net_l2_flags ppp_flags(struct net_if *iface)
 
 NET_L2_INIT(PPP_L2, ppp_recv, ppp_send, ppp_enable, ppp_flags);
 
+/* A workaround for PPP L2 not yet supporting net_if_carrier_on/off(). */
+void ppp_if_carrier_down(struct net_if *iface)
+{
+	net_if_flag_clear(iface, NET_IF_UP);
+	net_mgmt_event_notify(NET_EVENT_IF_DOWN, iface);
+	net_ipv4_autoconf_reset(iface);
+}
+
 static void carrier_on_off(struct k_work *work)
 {
 	struct ppp_context *ctx = CONTAINER_OF(work, struct ppp_context,
@@ -284,11 +293,15 @@ static void carrier_on_off(struct k_work *work)
 		ppp_mgmt_raise_carrier_on_event(ctx->iface);
 		net_if_up(ctx->iface);
 	} else {
-		ppp_lower_down(ctx);
-		ppp_change_phase(ctx, PPP_DEAD);
+		if (ppp_lcp) {
+			ppp_lcp->close(ctx, "Shutdown");
+			/* signaling for the carrier off event is done from the LCP callback */
+		} else {
+			ppp_change_phase(ctx, PPP_DEAD);
 
-		ppp_mgmt_raise_carrier_off_event(ctx->iface);
-		net_if_carrier_down(ctx->iface);
+			ppp_mgmt_raise_carrier_off_event(ctx->iface);
+			ppp_if_carrier_down(ctx->iface);
+		}
 	}
 }
 
@@ -408,7 +421,8 @@ const struct ppp_protocol_handler *ppp_lcp_get(void)
 
 static void ppp_startup(struct k_work *work)
 {
-	struct ppp_context *ctx = CONTAINER_OF(work, struct ppp_context,
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct ppp_context *ctx = CONTAINER_OF(dwork, struct ppp_context,
 					       startup);
 	int count = 0;
 

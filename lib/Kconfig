@@ -3,9 +3,9 @@
 
 source "lib/libc/Kconfig"
 
-menu "Additional libraries"
+source "lib/cpp/Kconfig"
 
-source "lib/gui/Kconfig"
+menu "Additional libraries"
 
 source "lib/os/Kconfig"
 
@@ -14,5 +14,7 @@ source "lib/posix/Kconfig"
 source "lib/open-amp/Kconfig"
 
 source "lib/util/Kconfig"
+
+source "lib/smf/Kconfig"
 
 endmenu

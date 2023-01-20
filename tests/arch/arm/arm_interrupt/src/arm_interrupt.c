@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <ztest.h>
-#include <arch/cpu.h>
-#include <arch/arm/aarch32/cortex_m/cmsis.h>
+#include <zephyr/ztest.h>
+#include <zephyr/arch/cpu.h>
+#include <zephyr/arch/arm/aarch32/cortex_m/cmsis.h>
 
 static volatile int test_flag;
 static volatile int expected_reason = -1;
@@ -151,7 +151,7 @@ void set_regs_with_known_pattern(void)
 	);
 }
 
-void test_arm_esf_collection(void)
+ZTEST(arm_interrupt, test_arm_esf_collection)
 {
 	int test_validation_rv;
 
@@ -166,7 +166,13 @@ void test_arm_esf_collection(void)
 	expected_msp = __get_MSP();
 
 	run_esf_validation = 1;
+#if defined(CONFIG_CPU_AARCH32_CORTEX_R) || defined(CONFIG_CPU_AARCH32_CORTEX_A)
+	expected_reason = K_ERR_ARM_UNDEFINED_INSTRUCTION;
+#elif defined(CONFIG_ARMV7_M_ARMV8_M_MAINLINE)
+	expected_reason = K_ERR_ARM_USAGE_UNDEFINED_INSTRUCTION;
+#else
 	expected_reason = K_ERR_CPU_EXCEPTION;
+#endif
 
 	/* Run test thread and main thread at same priority to guarantee the
 	 * crashy thread we create below runs to completion before we get
@@ -197,7 +203,15 @@ void arm_isr_handler(const void *args)
 	 * to prevent from having the interrupt line set to pending again,
 	 * in case FPU IRQ is selected by the test as "Available IRQ line"
 	 */
+#if defined(CONFIG_ARMV8_1_M_MAINLINE)
+	/*
+	 * For ARMv8.1-M with FPU, the FPSCR[18:16] LTPSIZE field must be set
+	 * to 0b100 for "Tail predication not applied" as it's reset value
+	 */
+	__set_FPSCR(4 << FPU_FPDSCR_LTPSIZE_Pos);
+#else
 	__set_FPSCR(0);
+#endif
 #endif
 
 	test_flag++;
@@ -228,7 +242,7 @@ void arm_isr_handler(const void *args)
 	}
 }
 
-void test_arm_interrupt(void)
+ZTEST(arm_interrupt, test_arm_interrupt)
 {
 	/* Determine an NVIC IRQ line that is not currently in use. */
 	int i;
@@ -369,7 +383,7 @@ void test_arm_interrupt(void)
 }
 
 #if defined(CONFIG_USERSPACE)
-#include <syscall_handler.h>
+#include <zephyr/syscall_handler.h>
 #include "test_syscalls.h"
 
 void z_impl_test_arm_user_interrupt_syscall(void)
@@ -387,7 +401,7 @@ void z_impl_test_arm_user_interrupt_syscall(void)
 		first_call = 0;
 
 		/* Lock IRQs in supervisor mode */
-		int key = irq_lock();
+		unsigned int key = irq_lock();
 
 		/* Verify that IRQs were not already locked */
 		zassert_false(key, "IRQs locked in system call\n");
@@ -404,7 +418,7 @@ static inline void z_vrfy_test_arm_user_interrupt_syscall(void)
 }
 #include <syscalls/test_arm_user_interrupt_syscall_mrsh.c>
 
-void test_arm_user_interrupt(void)
+ZTEST_USER(arm_interrupt, test_arm_user_interrupt)
 {
 	/* Test thread executing in user mode */
 	zassert_true(arch_is_user_context(),
@@ -440,7 +454,7 @@ void test_arm_user_interrupt(void)
 #endif
 }
 #else
-void test_arm_user_interrupt(void)
+ZTEST_USER(arm_interrupt, test_arm_user_interrupt)
 {
 	TC_PRINT("Skipped\n");
 }
@@ -450,7 +464,7 @@ void test_arm_user_interrupt(void)
 #pragma GCC push_options
 #pragma GCC optimize("O0")
 /* Avoid compiler optimizing null pointer de-referencing. */
-void test_arm_null_pointer_exception(void)
+ZTEST(arm_interrupt, test_arm_null_pointer_exception)
 {
 	int reason;
 
@@ -460,7 +474,7 @@ void test_arm_null_pointer_exception(void)
 
 	struct test_struct *test_struct_null_pointer = 0x0;
 
-	expected_reason = K_ERR_CPU_EXCEPTION;
+	expected_reason = K_ERR_ARM_MEM_DATA_ACCESS;
 
 	printk("Reading a null pointer value: 0x%0x\n",
 		test_struct_null_pointer->val[1]);
@@ -471,7 +485,7 @@ void test_arm_null_pointer_exception(void)
 }
 #pragma GCC pop_options
 #else
-void test_arm_null_pointer_exception(void)
+ZTEST(arm_interrupt, test_arm_null_pointer_exception)
 {
 	TC_PRINT("Skipped\n");
 }

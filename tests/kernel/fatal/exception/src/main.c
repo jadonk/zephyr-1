@@ -4,24 +4,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr.h>
-#include <ztest.h>
-#include <tc_util.h>
-#include <kernel_structs.h>
-#include <irq_offload.h>
+#include <zephyr/kernel.h>
+#include <zephyr/ztest.h>
+#include <zephyr/tc_util.h>
+#include <zephyr/kernel_structs.h>
+#include <zephyr/irq_offload.h>
 #include <kswap.h>
 #include <assert.h>
 
 #if defined(CONFIG_USERSPACE)
-#include <sys/mem_manage.h>
-#include <syscall_handler.h>
+#include <zephyr/sys/mem_manage.h>
+#include <zephyr/syscall_handler.h>
 #include "test_syscalls.h"
 #endif
 
 #if defined(CONFIG_X86) && defined(CONFIG_X86_MMU)
 #define STACKSIZE (8192)
 #else
-#define  STACKSIZE (2048 + CONFIG_TEST_EXTRA_STACKSIZE)
+#define  STACKSIZE (2048 + CONFIG_TEST_EXTRA_STACK_SIZE)
 #endif
 #define MAIN_PRIORITY 7
 #define PRIORITY 5
@@ -45,6 +45,7 @@ static struct k_thread alt_thread;
 volatile int rv;
 
 static ZTEST_DMEM volatile int expected_reason = -1;
+static ZTEST_DMEM volatile int alternate_reason = -1;
 
 void k_sys_fatal_error_handler(unsigned int reason, const z_arch_esf_t *pEsf)
 {
@@ -60,18 +61,34 @@ void k_sys_fatal_error_handler(unsigned int reason, const z_arch_esf_t *pEsf)
 		k_fatal_halt(reason);
 	}
 
-	if (reason != expected_reason) {
-		printk("Wrong crash type got %d expected %d\n", reason,
-		       expected_reason);
+	if ((reason != expected_reason) && (reason != alternate_reason)) {
+		if (alternate_reason != -1) {
+			printk("Wrong crash type got %d expected %d or %d\n", reason,
+				expected_reason, alternate_reason);
+		} else {
+			printk("Wrong crash type got %d expected %d\n", reason,
+				expected_reason);
+		}
 		k_fatal_halt(reason);
 	}
 
 	expected_reason = -1;
+	alternate_reason = -1;
 }
 
 void entry_cpu_exception(void *p1, void *p2, void *p3)
 {
+#if defined(CONFIG_CPU_AARCH32_CORTEX_R) || defined(CONFIG_CPU_AARCH32_CORTEX_A)
+	expected_reason = K_ERR_ARM_UNDEFINED_INSTRUCTION;
+#elif defined(CONFIG_ARMV7_M_ARMV8_M_MAINLINE)
+	/* The generated exception depends on whether address 0 is valid and it is executed.
+	 * It is not feasible to generically check that here, so accept either faulting reason.
+	 */
+	expected_reason = K_ERR_ARM_USAGE_ILLEGAL_EPSR;
+	alternate_reason = K_ERR_ARM_MEM_INSTRUCTION_ACCESS;
+#else
 	expected_reason = K_ERR_CPU_EXCEPTION;
+#endif
 
 #if defined(CONFIG_X86)
 	__asm__ volatile ("ud2");
@@ -79,9 +96,12 @@ void entry_cpu_exception(void *p1, void *p2, void *p3)
 	__asm__ volatile ("trap");
 #elif defined(CONFIG_ARC)
 	__asm__ volatile ("swi");
+#elif defined(CONFIG_RISCV)
+	/* Illegal instruction on RISCV. */
+	__asm__ volatile (".word 0x77777777");
 #else
-	/* Triggers usage fault on ARM, illegal instruction on RISCV
-	 * and xtensa
+	/* Triggers usage fault on ARM, illegal instruction on
+	 * xtensa, TLB exception (instruction fetch) on MIPS.
 	 */
 	{
 		volatile long illegal = 0;
@@ -93,11 +113,15 @@ void entry_cpu_exception(void *p1, void *p2, void *p3)
 
 void entry_cpu_exception_extend(void *p1, void *p2, void *p3)
 {
+#if defined(CONFIG_CPU_AARCH32_CORTEX_R) || defined(CONFIG_CPU_AARCH32_CORTEX_A)
+	expected_reason = K_ERR_ARM_DEBUG_EVENT;
+#else
 	expected_reason = K_ERR_CPU_EXCEPTION;
+#endif
 
 #if defined(CONFIG_ARM64)
 	__asm__ volatile ("svc 0");
-#elif defined(CONFIG_CPU_CORTEX_R)
+#elif defined(CONFIG_CPU_AARCH32_CORTEX_R) || defined(CONFIG_CPU_AARCH32_CORTEX_A)
 	__asm__ volatile ("BKPT");
 #elif defined(CONFIG_CPU_CORTEX_M)
 	__asm__ volatile ("swi 0");
@@ -114,7 +138,7 @@ void entry_cpu_exception_extend(void *p1, void *p2, void *p3)
 #elif defined(CONFIG_ARC)
 	__asm__ volatile ("swi");
 #else
-	/* used to create a divide by zero error on X86 */
+	/* used to create a divide by zero error on X86 and MIPS */
 	volatile int error;
 	volatile int zero = 0;
 
@@ -126,28 +150,20 @@ void entry_cpu_exception_extend(void *p1, void *p2, void *p3)
 
 void entry_oops(void *p1, void *p2, void *p3)
 {
-	unsigned int key;
-
 	expected_reason = K_ERR_KERNEL_OOPS;
 
-	key = irq_lock();
 	k_oops();
 	TC_ERROR("SHOULD NEVER SEE THIS\n");
 	rv = TC_FAIL;
-	irq_unlock(key);
 }
 
 void entry_panic(void *p1, void *p2, void *p3)
 {
-	unsigned int key;
-
 	expected_reason = K_ERR_KERNEL_PANIC;
 
-	key = irq_lock();
 	k_panic();
 	TC_ERROR("SHOULD NEVER SEE THIS\n");
 	rv = TC_FAIL;
-	irq_unlock(key);
 }
 
 void entry_zephyr_assert(void *p1, void *p2, void *p3)
@@ -160,28 +176,20 @@ void entry_zephyr_assert(void *p1, void *p2, void *p3)
 
 void entry_arbitrary_reason(void *p1, void *p2, void *p3)
 {
-	unsigned int key;
-
 	expected_reason = INT_MAX;
 
-	key = irq_lock();
 	z_except_reason(INT_MAX);
 	TC_ERROR("SHOULD NEVER SEE THIS\n");
 	rv = TC_FAIL;
-	irq_unlock(key);
 }
 
 void entry_arbitrary_reason_negative(void *p1, void *p2, void *p3)
 {
-	unsigned int key;
-
 	expected_reason = -2;
 
-	key = irq_lock();
 	z_except_reason(-2);
 	TC_ERROR("SHOULD NEVER SEE THIS\n");
 	rv = TC_FAIL;
-	irq_unlock(key);
 }
 
 #ifndef CONFIG_ARCH_POSIX
@@ -197,10 +205,21 @@ __no_optimization void blow_up_stack(void)
 #else
 /* stack sentinel doesn't catch it in time before it trashes the entire kernel
  */
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpragmas"
+#pragma GCC diagnostic ignored "-Winfinite-recursion"
+#endif
+
 __no_optimization int stack_smasher(int val)
 {
 	return stack_smasher(val * 2) + stack_smasher(val * 3);
 }
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 void blow_up_stack(void)
 {
@@ -242,12 +261,10 @@ void stack_sentinel_timer(void *p1, void *p2, void *p3)
 
 void stack_sentinel_swap(void *p1, void *p2, void *p3)
 {
-	unsigned int key = irq_lock();
-
 	/* Test that stack overflow check due to swap works */
 	blow_up_stack();
 	TC_PRINT("swapping...\n");
-	z_swap_irqlock(key);
+	z_swap_unlocked();
 	TC_ERROR("should never see this\n");
 	rv = TC_FAIL;
 }
@@ -302,7 +319,7 @@ void check_stack_overflow(k_thread_entry_t handler, uint32_t flags)
  *
  * @ingroup kernel_common_tests
  */
-void test_fatal(void)
+ZTEST(fatal_exception, test_fatal)
 {
 	rv = TC_PASS;
 
@@ -444,8 +461,7 @@ void test_fatal(void)
 #endif /* !CONFIG_ARCH_POSIX */
 }
 
-/*test case main entry*/
-void test_main(void)
+static void *fatal_setup(void)
 {
 #if defined(CONFIG_DEMAND_PAGING) && \
 	!defined(CONFIG_LINKER_GENERIC_SECTIONS_PRESENT_AT_BOOT)
@@ -495,7 +511,7 @@ void test_main(void)
 	* && !CONFIG_LINKER_GENERIC_SECTIONS_PRESENT_AT_BOOT
 	*/
 
-	ztest_test_suite(fatal,
-			ztest_unit_test(test_fatal));
-	ztest_run_test_suite(fatal);
+	return NULL;
 }
+
+ZTEST_SUITE(fatal_exception, NULL, fatal_setup, NULL, NULL, NULL);

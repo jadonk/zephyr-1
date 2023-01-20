@@ -11,8 +11,7 @@ high-performance feature set in low-cost LQFP packages, further simplifying
 board design and layout for customers. The i.MX RT1024 runs on the Arm®
 Cortex®-M7 core at 500 MHz.
 
-.. image:: ./mimxrt1024_evk.jpg
-   :width: 720px
+.. image:: mimxrt1024_evk.jpg
    :align: center
    :alt: MIMXRT1024-EVK
 
@@ -25,7 +24,7 @@ Hardware
 - Memory
 
   - 256 Mbit SDRAM
-  - 64 Mbit QSPI Flash
+  - 32 Mbit QSPI Flash
   - TF socket for SD card
 
 - Connectivity
@@ -51,6 +50,10 @@ Hardware
   - JTAG 10-pin connector
   - OpenSDA with DAPLink
 
+- Sensor
+
+  - 6-axis FXOS8700CQ digital accelerometer and magnetometer
+
 For more information about the MIMXRT1024 SoC and MIMXRT1024-EVK board, see
 these references:
 
@@ -64,8 +67,12 @@ these references:
 Supported Features
 ==================
 
-The mimxrt1024_evk board configuration supports the following hardware
-features:
+The mimxrt1024_evk board configuration supports the hardware features listed
+below.  For additional features not yet supported, please also refer to the
+:ref:`mimxrt1064_evk` , which is the superset board in NXP's i.MX RT10xx family.
+NXP prioritizes enabling the superset board with NXP's Full Platform Support for
+Zephyr.  Therefore, the mimxrt1064_evk board may have additional features
+already supported, which can also be re-used on this mimxrt1024_evk board:
 
 +-----------+------------+-------------------------------------+
 | Interface | Controller | Driver/Component                    |
@@ -74,12 +81,34 @@ features:
 +-----------+------------+-------------------------------------+
 | SYSTICK   | on-chip    | systick                             |
 +-----------+------------+-------------------------------------+
+| FLASH     | on-chip    | QSPI flash                          |
++-----------+------------+-------------------------------------+
 | GPIO      | on-chip    | gpio                                |
 +-----------+------------+-------------------------------------+
 | UART      | on-chip    | serial port-polling;                |
 |           |            | serial port-interrupt               |
 +-----------+------------+-------------------------------------+
+| SPI       | on-chip    | spi                                 |
++-----------+------------+-------------------------------------+
 | ENET      | on-chip    | ethernet                            |
++-----------+------------+-------------------------------------+
+| CAN       | on-chip    | can                                 |
++-----------+------------+-------------------------------------+
+| WATCHDOG  | on-chip    | watchdog                            |
++-----------+------------+-------------------------------------+
+| HWINFO    | on-chip    | reset cause                         |
++-----------+------------+-------------------------------------+
+| DMA       | on-chip    | dma                                 |
++-----------+------------+-------------------------------------+
+| ADC       | on-chip    | adc                                 |
++-----------+------------+-------------------------------------+
+| GPT       | on-chip    | gpt                                 |
++-----------+------------+-------------------------------------+
+| USB       | on-chip    | USB                                 |
++-----------+------------+-------------------------------------+
+| TRNG      | on-chip    | entropy                             |
++-----------+------------+-------------------------------------+
+| FLEXSPI   | on-chip    | flash programming                   |
 +-----------+------------+-------------------------------------+
 
 The default configuration can be found in the defconfig file:
@@ -109,13 +138,13 @@ The MIMXRT1024 SoC has five pairs of pinmux/gpio controllers.
 +---------------+-----------------+---------------------------+
 | GPIO_AD_B0_09 | ENET_RX_DATA01  | Ethernet                  |
 +---------------+-----------------+---------------------------+
-| GPIO_AD_B0_10 | ENET_RX_DATA00  | Ethernet                  |
+| GPIO_AD_B0_10 | ENET_RX_DATA00/LPSPI1_SCK | Ethernet/SPI    |
 +---------------+-----------------+---------------------------+
-| GPIO_AD_B0_11 | ENET_RX_EN      | Ethernet                  |
+| GPIO_AD_B0_11 | ENET_RX_EN/LPSPI1_PCS0 | Ethernet/SPI       |
 +---------------+-----------------+---------------------------+
-| GPIO_AD_B0_12 | ENET_RX_ER      | Ethernet                  |
+| GPIO_AD_B0_12 | ENET_RX_ER/LPSPI1_SDO | Ethernet/SPI        |
 +---------------+-----------------+---------------------------+
-| GPIO_AD_B0_13 | ENET_TX_EN      | Ethernet                  |
+| GPIO_AD_B0_13 | ENET_TX_EN/LPSPI1_SDI | Ethernet/SPI        |
 +---------------+-----------------+---------------------------+
 | GPIO_AD_B0_14 | ENET_TX_DATA00  | Ethernet                  |
 +---------------+-----------------+---------------------------+
@@ -127,12 +156,29 @@ The MIMXRT1024 SoC has five pairs of pinmux/gpio controllers.
 +---------------+-----------------+---------------------------+
 | GPIO_EMC_40   | ENET_MDIO       | Ethernet                  |
 +---------------+-----------------+---------------------------+
+| GPIO_SD_B1_00 | FLEXCAN1_TX     | CAN TX                    |
++---------------+-----------------+---------------------------+
+| GPIO_SD_B1_01 | FLEXCAN1_RX     | CAN RX                    |
++---------------+-----------------+---------------------------+
+| GPIO_SD_B1_02 | LPI2C4_SCL      | I2C SCL                   |
++---------------+-----------------+---------------------------+
+| GPIO_SD_B1_03 | LPI2C4_SDA      | I2C SDA                   |
++---------------+-----------------+---------------------------+
+| GPIO_AD_B1_11 | ADC1            | ADC1 Channel 11           |
++---------------+-----------------+---------------------------+
+| GPIO_AD_B1_10 | ADC1            | ADC1 Channel 10           |
++---------------+-----------------+---------------------------+
 
 System Clock
 ============
 
-The MIMXRT1024 SoC is configured to use the 24 MHz external oscillator on the
-board with the on-chip PLL to generate a 500 MHz core clock.
+The MIMXRT1024 SoC is configured to use SysTick as the system clock source,
+running at 500MHz.
+
+When power management is enabled, the 32 KHz low frequency
+oscillator on the board will be used as a source for the GPT timer to
+generate a system clock. This clock enables lower power states, at the
+cost of reduced resolution
 
 Serial Port
 ===========
@@ -223,10 +269,10 @@ should see the following message in the terminal:
    https://www.nxp.com/design/development-boards/i-mx-evaluation-and-development-boards/i-mx-rt1024-evaluation-kit:MIMXRT1024-EVK
 
 .. _MIMXRT1024-EVK User Guide:
-   https://www.nxp.com.cn/docs/en/user-guide/MIMXRT1024EVKHUG.pdf
+   https://www.nxp.com/webapp/Download?colCode=MIMXRT1024EVKHUG
 
 .. _MIMXRT1024-EVK Design Files:
-   https://www.nxp.com/webapp/sps/download/preDownload.jsp?render=true
+   https://www.nxp.com/webapp/Download?colCode=MIMXRT1024-EVK-Design-Files
 
 .. _i.MX RT1024 Website:
    https://www.nxp.com/products/processors-and-microcontrollers/arm-microcontrollers/i-mx-rt-crossover-mcus/i-mx-rt1024-crossover-processor-with-arm-cortex-m7-core:i.MX-RT1024
@@ -235,4 +281,4 @@ should see the following message in the terminal:
    https://www.nxp.com.cn/docs/en/data-sheet/IMXRT1024CEC.pdf
 
 .. _i.MX RT1024 Reference Manual:
-   https://www.nxp.com.cn/docs/en/reference-manual/IMXRT1024RM.pdf
+   https://www.nxp.com/webapp/Download?colCode=IMXRT1024RM

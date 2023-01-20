@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr.h>
-#include <irq_offload.h>
-#include <ztest.h>
+#include <zephyr/kernel.h>
+#include <zephyr/irq_offload.h>
+#include <zephyr/ztest.h>
 #include <limits.h>
 
 #define MSGQ_LEN (2)
-#define STACK_SIZE (512 + CONFIG_TEST_EXTRA_STACKSIZE)
+#define STACK_SIZE (512 + CONFIG_TEST_EXTRA_STACK_SIZE)
 #define NUM_SERVICES 2
 #define TIMEOUT K_MSEC(100)
 
@@ -50,7 +50,7 @@ enum message_info {
 
 static void service_manager_entry(void *p1, void *p2, void *p3)
 {
-	unsigned long data[2];
+	static unsigned long data[2];
 
 	while (1) {
 		k_msgq_get(&manager_q, data, K_FOREVER);
@@ -96,7 +96,7 @@ static void start_service_manager(void)
 
 static void service1_entry(void *p1, void *p2, void *p3)
 {
-	unsigned long service_data[2];
+	static unsigned long service_data[2];
 	struct k_msgq *client;
 	int ret;
 
@@ -127,7 +127,7 @@ static void service1_entry(void *p1, void *p2, void *p3)
 
 static void service2_entry(void *p1, void *p2, void *p3)
 {
-	unsigned long service_data[2];
+	static unsigned long service_data[2];
 	struct k_msgq *client;
 	int ret;
 
@@ -174,8 +174,8 @@ static void register_service(void)
 
 static void client_entry(void *p1, void *p2, void *p3)
 {
-	unsigned long client_data[2];
-	unsigned long service_data[2];
+	static unsigned long client_data[2];
+	static unsigned long service_data[2];
 	struct k_msgq *service1q;
 	struct k_msgq *service2q;
 	bool query_service = false;
@@ -194,13 +194,13 @@ static void client_entry(void *p1, void *p2, void *p3)
 	/* query services */
 	k_msgq_put(&manager_q, client_data, K_NO_WAIT);
 	ret = k_msgq_get(&client_msgq, service_data, K_FOREVER);
-	zassert_equal(ret, 0, NULL);
+	zassert_equal(ret, 0);
 
 	service1q = (struct k_msgq *)service_data[0];
 	service2q = (struct k_msgq *)service_data[1];
 	/* all services should be running */
-	zassert_equal(service1q, &service1_msgq, NULL);
-	zassert_equal(service2q, &service2_msgq, NULL);
+	zassert_equal(service1q, &service1_msgq);
+	zassert_equal(service2q, &service2_msgq);
 	/* let the test thread continue */
 	k_sem_give(&test_continue);
 
@@ -259,7 +259,7 @@ static void start_client(void)
 				  0, K_NO_WAIT);
 }
 
-void test_msgq_usage(void)
+ZTEST(msgq_usage, test_msgq_usage)
 {
 	start_service_manager();
 	register_service();
@@ -267,7 +267,7 @@ void test_msgq_usage(void)
 	/* waiting to continue */
 	k_sem_take(&test_continue, K_FOREVER);
 
-	/* rather than schedule this thread by k_msleep(), use semaphor with
+	/* rather than schedule this thread by k_msleep(), use semaphore with
 	 * a timeout value, so there is no give operation over service_sema
 	 */
 	TC_PRINT("try to kill service1\n");
@@ -284,8 +284,4 @@ void test_msgq_usage(void)
 	k_thread_abort(tservice_manager);
 }
 
-void test_main(void)
-{
-	ztest_test_suite(msgq_usage, ztest_unit_test(test_msgq_usage));
-	ztest_run_test_suite(msgq_usage);
-}
+ZTEST_SUITE(msgq_usage, NULL, NULL, NULL, NULL, NULL);

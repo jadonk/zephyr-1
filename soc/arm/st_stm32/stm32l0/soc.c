@@ -9,11 +9,13 @@
  * @brief System/hardware module for STM32L0 processor
  */
 
-#include <device.h>
-#include <init.h>
-#include <arch/cpu.h>
-#include <arch/arm/aarch32/cortex_m/cmsis.h>
-#include <linker/linker-defs.h>
+#include <zephyr/device.h>
+#include <zephyr/init.h>
+#include <zephyr/arch/cpu.h>
+#include <zephyr/arch/arm/aarch32/cortex_m/cmsis.h>
+#include <zephyr/arch/arm/aarch32/nmi.h>
+#include <zephyr/irq.h>
+#include <zephyr/linker/linker-defs.h>
 #include <string.h>
 #include <stm32_ll_bus.h>
 #include <stm32_ll_pwr.h>
@@ -60,7 +62,7 @@ static int stm32l0_init(const struct device *arg)
 	 * (similarly than it fixes
 	 * https://github.com/zephyrproject-rtos/zephyr/issues/#34324 )
 	 */
-	LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_DBGMCU);
+	LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMA1);
 
 	return 0;
 }

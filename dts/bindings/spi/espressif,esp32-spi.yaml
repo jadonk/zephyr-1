@@ -2,70 +2,65 @@ description: ESP32 SPI
 
 compatible: "espressif,esp32-spi"
 
-include: spi-controller.yaml
+include: [spi-controller.yaml, pinctrl-device.yaml]
 
 properties:
-    reg:
-      required: true
+  reg:
+    required: true
 
-    interrupts:
-      required: false
+  pinctrl-0:
+    required: true
 
-    miso-pin:
-      type: int
-      description: MISO pin
-      required: true
+  pinctrl-names:
+    required: true
 
-    mosi-pin:
-      type: int
-      description: MOSI pin
-      required: true
+  half-duplex:
+    type: boolean
+    description: |
+      Enable half-duplex communication mode.
 
-    sclk-pin:
-      type: int
-      description: SPI generated clock pin
-      required: true
+      Transmit data before receiving it, instead of simultaneously
 
-    csel-pin:
-      type: int
-      description: chip select pin
-      required: true
+  dummy-comp:
+    type: boolean
+    description: Enable dummy SPI compensation cycles
 
-    half-duplex:
-      type: boolean
-      required: false
-      description: |
-        Enable half-duplex communication mode.
+  sio:
+    type: boolean
+    description: |
+      Enable 3-wire mode
 
-        Transmit data before receiving it, instead of simultaneously
+      Use MOSI for both sending and receiving data
 
-    dummy-comp:
-      type: boolean
-      required: false
-      description: Enable dummy SPI compensation cycles
+  dma-enabled:
+    type: boolean
+    description: Enable SPI DMA support
 
-    sio:
-      type: boolean
-      required: false
-      description: |
-        Enable 3-wire mode
+  dma-clk:
+    type: int
+    description: DMA clock source
 
-        Use MOSI for both sending and receiving data
+  dma-host:
+    type: int
+    description: DMA Host - 0 -> SPI2, 1 -> SPI3
 
-    dma:
-      type: boolean
-      required: false
-      description: Enable SPI DMA support
+  clk-as-cs:
+    type: boolean
+    description: |
+      Support to toggle the CS while the clock toggles
 
-    clk-as-cs:
-      type: boolean
-      required: false
-      description: |
-        Support to toggle the CS while the clock toggles
+      Output clock on CS line if CS is active
 
-        Output clock on CS line if CS is active
+  positive-cs:
+    type: boolean
+    description: Make CS positive during a transaction instead of negative
 
-    positive-cs:
-      type: boolean
-      required: false
-      description: Make CS positive during a transaction instead of negative
+  use-iomux:
+    type: boolean
+    description: |
+      Some pins are allowed to bypass the GPIO Matrix and use the IO_MUX
+      routing mechanism instead, this avoids extra routing latency and makes
+      possible the use of operating frequencies higher than 20 MHz.
+
+      Refer to SoC's Technical Reference Manual to check which pins are
+      allowed to use this routing path.

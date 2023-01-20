@@ -9,7 +9,9 @@
 
 #define DT_DRV_COMPAT st_stm32_watchdog
 
-#include <drivers/watchdog.h>
+#include <zephyr/drivers/watchdog.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys_clock.h>
 #include <soc.h>
 #include <stm32_ll_bus.h>
 #include <stm32_ll_iwdg.h>
@@ -83,6 +85,8 @@ static int iwdg_stm32_setup(const struct device *dev, uint8_t options)
 	if (options & WDT_OPT_PAUSE_HALTED_BY_DBG) {
 #if defined(CONFIG_SOC_SERIES_STM32F0X)
 		LL_APB1_GRP2_EnableClock(LL_APB1_GRP2_PERIPH_DBGMCU);
+#elif defined(CONFIG_SOC_SERIES_STM32G0X)
+		LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_DBGMCU);
 #elif defined(CONFIG_SOC_SERIES_STM32L0X)
 		LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_DBGMCU);
 #endif
@@ -97,7 +101,9 @@ static int iwdg_stm32_setup(const struct device *dev, uint8_t options)
 		return -ENOTSUP;
 	}
 
-	LL_IWDG_Enable(iwdg);
+	/* Enable the IWDG now (timeout has been installed previoulsy) */
+	LL_IWDG_Enable(iwdg); /* No need to Reload counter */
+
 	return 0;
 }
 
@@ -132,20 +138,16 @@ static int iwdg_stm32_install_timeout(const struct device *dev,
 
 	tickstart = k_uptime_get_32();
 
+	/* Do not enable the wdg during install but during wdt_setup() */
 	LL_IWDG_EnableWriteAccess(iwdg);
-
 	LL_IWDG_SetPrescaler(iwdg, prescaler);
-	LL_IWDG_SetReloadCounter(iwdg, reload);
 
 	/* Wait for the update operation completed */
-	while (LL_IWDG_IsReady(iwdg) != 0) {
+	while (LL_IWDG_IsActiveFlag_PVU(iwdg) == 0) {
 		if ((k_uptime_get_32() - tickstart) > IWDG_SR_UPDATE_TIMEOUT) {
 			return -ENODEV;
 		}
 	}
-
-	/* Reload counter just before leaving */
-	LL_IWDG_ReloadCounter(iwdg);
 
 	return 0;
 }
@@ -170,12 +172,10 @@ static const struct wdt_driver_api iwdg_stm32_api = {
 static int iwdg_stm32_init(const struct device *dev)
 {
 #ifndef CONFIG_WDT_DISABLE_AT_BOOT
-	IWDG_TypeDef *iwdg = IWDG_STM32_STRUCT(dev);
 	struct wdt_timeout_cfg config = {
 		.window.max = CONFIG_IWDG_STM32_INITIAL_TIMEOUT
 	};
 
-	LL_IWDG_Enable(iwdg);
 	iwdg_stm32_install_timeout(dev, &config);
 #endif
 

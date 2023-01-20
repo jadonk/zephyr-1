@@ -7,20 +7,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <cache.h>
-#include <device.h>
-#include <init.h>
-#include <kernel.h>
+#include <zephyr/cache.h>
+#include <zephyr/device.h>
+#include <zephyr/init.h>
+#include <zephyr/kernel.h>
 #include <kernel_arch_func.h>
 #include <kernel_arch_interface.h>
 #include <kernel_internal.h>
-#include <logging/log.h>
-#include <arch/arm64/cpu.h>
-#include <arch/arm64/lib_helpers.h>
-#include <arch/arm64/arm_mmu.h>
-#include <linker/linker-defs.h>
-#include <spinlock.h>
-#include <sys/util.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/arch/arm64/cpu.h>
+#include <zephyr/arch/arm64/lib_helpers.h>
+#include <zephyr/arch/arm64/mm.h>
+#include <zephyr/linker/linker-defs.h>
+#include <zephyr/spinlock.h>
+#include <zephyr/sys/util.h>
 
 #include "mmu.h"
 
@@ -102,6 +102,19 @@ static inline uint64_t *pte_desc_table(uint64_t desc)
 	uint64_t address = desc & GENMASK(47, PAGE_SIZE_SHIFT);
 
 	return (uint64_t *)address;
+}
+
+static inline bool is_desc_block_aligned(uint64_t desc, unsigned int level_size)
+{
+	uint64_t mask = GENMASK(47, PAGE_SIZE_SHIFT);
+	bool aligned = !((desc & mask) & (level_size - 1));
+
+	if (!aligned) {
+		MMU_DEBUG("misaligned desc 0x%016llx for block size 0x%x\n",
+			  desc, level_size);
+	}
+
+	return aligned;
 }
 
 static inline bool is_desc_superset(uint64_t desc1, uint64_t desc2,
@@ -259,7 +272,8 @@ static int set_mapping(struct arm_mmu_ptables *ptables,
 			goto move_on;
 		}
 
-		if ((size < level_size) || (virt & (level_size - 1))) {
+		if ((size < level_size) || (virt & (level_size - 1)) ||
+		    !is_desc_block_aligned(desc, level_size)) {
 			/* Range doesn't fit, create subtable */
 			table = expand_to_table(pte, level);
 			if (!table) {
@@ -318,6 +332,17 @@ static uint64_t *dup_table(uint64_t *src_table, unsigned int level)
 		  table_index(dst_table), dst_table);
 
 	for (i = 0; i < Ln_XLAT_NUM_ENTRIES; i++) {
+		/*
+		 * After the table duplication, each table can be independently
+		 *  updated. Thus, entries may become non-global.
+		 * To keep the invariants very simple, we thus force the non-global
+		 *  bit on duplication. Moreover, there is no process to revert this
+		 *  (e.g. in `globalize_table`). Could be improved in future work.
+		 */
+		if (!is_free_desc(src_table[i]) && !is_table_desc(src_table[i], level)) {
+			src_table[i] |= PTE_BLOCK_DESC_NG;
+		}
+
 		dst_table[i] = src_table[i];
 		if (is_table_desc(src_table[i], level)) {
 			table_usage(pte_desc_table(src_table[i]), 1);
@@ -402,6 +427,16 @@ static int privatize_page_range(struct arm_mmu_ptables *dst_pt,
 	return ret;
 }
 
+/*
+ * GCC 12 and above may report a warning about the potential infinite recursion
+ * in the `discard_table` function.
+ */
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpragmas"
+#pragma GCC diagnostic ignored "-Winfinite-recursion"
+#endif
+
 static void discard_table(uint64_t *table, unsigned int level)
 {
 	unsigned int i;
@@ -418,6 +453,10 @@ static void discard_table(uint64_t *table, unsigned int level)
 	}
 	free_table(table);
 }
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 static int globalize_table(uint64_t *dst_table, uint64_t *src_table,
 			   uintptr_t virt, size_t size, unsigned int level)
@@ -571,6 +610,11 @@ static uint64_t get_region_desc(uint32_t attrs)
 			desc |= PTE_BLOCK_DESC_OUTER_SHARE;
 	}
 
+	/* non-Global bit */
+	if (attrs & MT_NG) {
+		desc |= PTE_BLOCK_DESC_NG;
+	}
+
 	return desc;
 }
 
@@ -619,7 +663,7 @@ static int remove_map(struct arm_mmu_ptables *ptables, const char *name,
 static void invalidate_tlb_all(void)
 {
 	__asm__ volatile (
-	"tlbi vmalle1; dsb sy; isb"
+	"dsb ishst; tlbi vmalle1; dsb ish; isb"
 	: : : "memory");
 }
 
@@ -654,6 +698,14 @@ static const struct arm_mmu_flat_range mmu_zephyr_ranges[] = {
 	  .start = __rodata_region_start,
 	  .end   = __rodata_region_end,
 	  .attrs = MT_NORMAL | MT_P_RO_U_RO | MT_DEFAULT_SECURE_STATE },
+
+#ifdef CONFIG_NOCACHE_MEMORY
+	/* Mark nocache segment noncachable, read-write and execute-never */
+	{ .name  = "nocache_data",
+	  .start = _nocache_ram_start,
+	  .end   = _nocache_ram_end,
+	  .attrs = MT_NORMAL_NC | MT_P_RW_U_RW | MT_DEFAULT_SECURE_STATE },
+#endif
 };
 
 static inline void add_arm_mmu_flat_range(struct arm_mmu_ptables *ptables,
@@ -737,15 +789,19 @@ static uint64_t get_tcr(int el)
 		 * that are translated using TTBR1_EL1.
 		 */
 		tcr |= TCR_EPD1_DISABLE;
-	} else
+	} else {
 		tcr = (tcr_ps_bits << TCR_EL3_PS_SHIFT);
+	}
 
 	tcr |= TCR_T0SZ(va_bits);
+
 	/*
 	 * Translation table walk is cacheable, inner/outer WBWA and
-	 * inner shareable
+	 * inner shareable.  Due to Cortex-A57 erratum #822227 we must
+	 * set TG1[1] = 4KB.
 	 */
-	tcr |= TCR_TG0_4K | TCR_SHARED_INNER | TCR_ORGN_WBWA | TCR_IRGN_WBWA;
+	tcr |= TCR_TG1_4K | TCR_TG0_4K | TCR_SHARED_INNER |
+	       TCR_ORGN_WBWA | TCR_IRGN_WBWA;
 
 	return tcr;
 }
@@ -764,7 +820,7 @@ static void enable_mmu_el1(struct arm_mmu_ptables *ptables, unsigned int flags)
 	isb();
 
 	/* Invalidate all data caches before enable them */
-	sys_cache_data_all(K_CACHE_INVD);
+	sys_cache_data_invd_all();
 
 	/* Enable the MMU and data cache */
 	val = read_sctlr_el1();
@@ -840,7 +896,7 @@ static void sync_domains(uintptr_t virt, size_t size)
 static int __arch_mem_map(void *virt, uintptr_t phys, size_t size, uint32_t flags)
 {
 	struct arm_mmu_ptables *ptables;
-	uint32_t entry_flags = MT_SECURE | MT_P_RX_U_NA;
+	uint32_t entry_flags = MT_DEFAULT_SECURE_STATE | MT_P_RX_U_NA;
 
 	/* Always map in the kernel page tables */
 	ptables = &kernel_ptables;
@@ -848,15 +904,27 @@ static int __arch_mem_map(void *virt, uintptr_t phys, size_t size, uint32_t flag
 	/* Translate flags argument into HW-recognized entry flags. */
 	switch (flags & K_MEM_CACHE_MASK) {
 	/*
-	 * K_MEM_CACHE_NONE => MT_DEVICE_nGnRnE
+	 * K_MEM_CACHE_NONE, K_MEM_ARM_DEVICE_nGnRnE => MT_DEVICE_nGnRnE
 	 *			(Device memory nGnRnE)
+	 * K_MEM_ARM_DEVICE_nGnRE => MT_DEVICE_nGnRE
+	 *			(Device memory nGnRE)
+	 * K_MEM_ARM_DEVICE_GRE => MT_DEVICE_GRE
+	 *			(Device memory GRE)
 	 * K_MEM_CACHE_WB   => MT_NORMAL
 	 *			(Normal memory Outer WB + Inner WB)
 	 * K_MEM_CACHE_WT   => MT_NORMAL_WT
 	 *			(Normal memory Outer WT + Inner WT)
 	 */
 	case K_MEM_CACHE_NONE:
+	/* K_MEM_CACHE_NONE equal to K_MEM_ARM_DEVICE_nGnRnE */
+	/* case K_MEM_ARM_DEVICE_nGnRnE: */
 		entry_flags |= MT_DEVICE_nGnRnE;
+		break;
+	case K_MEM_ARM_DEVICE_nGnRE:
+		entry_flags |= MT_DEVICE_nGnRE;
+		break;
+	case K_MEM_ARM_DEVICE_GRE:
+		entry_flags |= MT_DEVICE_GRE;
 		break;
 	case K_MEM_CACHE_WT:
 		entry_flags |= MT_NORMAL_WT;
@@ -877,7 +945,7 @@ static int __arch_mem_map(void *virt, uintptr_t phys, size_t size, uint32_t flag
 	}
 
 	if ((flags & K_MEM_PERM_USER) != 0U) {
-		return -ENOTSUP;
+		entry_flags |= MT_RW_AP_ELx;
 	}
 
 	return add_map(ptables, "generic", phys, (uintptr_t)virt, size, entry_flags);
@@ -916,7 +984,7 @@ int arch_page_phys_get(void *virt, uintptr_t *phys)
 	key = arch_irq_lock();
 	__asm__ volatile ("at S1E1R, %0" : : "r" (virt));
 	isb();
-	par = read_sysreg(PAR_EL1);
+	par = read_par_el1();
 	arch_irq_unlock(key);
 
 	if (par & BIT(0)) {
@@ -929,12 +997,39 @@ int arch_page_phys_get(void *virt, uintptr_t *phys)
 	return 0;
 }
 
+size_t arch_virt_region_align(uintptr_t phys, size_t size)
+{
+	size_t alignment = CONFIG_MMU_PAGE_SIZE;
+	size_t level_size;
+	int level;
+
+	for (level = XLAT_LAST_LEVEL; level >= BASE_XLAT_LEVEL; level--) {
+		level_size = 1 << LEVEL_TO_VA_SIZE_SHIFT(level);
+
+		if (size < level_size) {
+			break;
+		}
+
+		if ((phys & (level_size - 1))) {
+			break;
+		}
+
+		alignment = level_size;
+	}
+
+	return alignment;
+}
+
 #ifdef CONFIG_USERSPACE
 
-static inline bool is_ptable_active(struct arm_mmu_ptables *ptables)
+static uint16_t next_asid = 1;
+
+static uint16_t get_asid(uint64_t ttbr0)
 {
-	return read_sysreg(ttbr0_el1) == (uintptr_t)ptables->base_xlat_table;
+	return ttbr0 >> TTBR_ASID_SHIFT;
 }
+
+static void z_arm64_swap_ptables(struct k_thread *incoming);
 
 int arch_mem_domain_max_partitions_get(void)
 {
@@ -945,78 +1040,96 @@ int arch_mem_domain_init(struct k_mem_domain *domain)
 {
 	struct arm_mmu_ptables *domain_ptables = &domain->arch.ptables;
 	k_spinlock_key_t key;
+	uint16_t asid;
 
 	MMU_DEBUG("%s\n", __func__);
 
 	key = k_spin_lock(&xlat_lock);
+
+	/*
+	 * Pick a new ASID. We use round-robin
+	 * Note: `next_asid` is an uint16_t and `VM_ASID_BITS` could
+	 *  be up to 16, hence `next_asid` might overflow to 0 below.
+	 */
+	asid = next_asid++;
+	if ((next_asid >= (1UL << VM_ASID_BITS)) || (next_asid == 0)) {
+		next_asid = 1;
+	}
+
 	domain_ptables->base_xlat_table =
 		dup_table(kernel_ptables.base_xlat_table, BASE_XLAT_LEVEL);
 	k_spin_unlock(&xlat_lock, key);
 	if (!domain_ptables->base_xlat_table) {
 		return -ENOMEM;
 	}
+
+	domain_ptables->ttbr0 =	(((uint64_t)asid) << TTBR_ASID_SHIFT) |
+		((uint64_t)(uintptr_t)domain_ptables->base_xlat_table);
+
 	sys_slist_append(&domain_list, &domain->arch.node);
 	return 0;
 }
 
-static void private_map(struct arm_mmu_ptables *ptables, const char *name,
-			uintptr_t phys, uintptr_t virt, size_t size, uint32_t attrs)
+static int private_map(struct arm_mmu_ptables *ptables, const char *name,
+		       uintptr_t phys, uintptr_t virt, size_t size, uint32_t attrs)
 {
 	int ret;
 
 	ret = privatize_page_range(ptables, &kernel_ptables, virt, size, name);
 	__ASSERT(ret == 0, "privatize_page_range() returned %d", ret);
-	ret = add_map(ptables, name, phys, virt, size, attrs);
+	ret = add_map(ptables, name, phys, virt, size, attrs | MT_NG);
 	__ASSERT(ret == 0, "add_map() returned %d", ret);
-	if (is_ptable_active(ptables)) {
-		invalidate_tlb_all();
-	}
+	invalidate_tlb_all();
+
+	return ret;
 }
 
-static void reset_map(struct arm_mmu_ptables *ptables, const char *name,
-		      uintptr_t addr, size_t size)
+static int reset_map(struct arm_mmu_ptables *ptables, const char *name,
+		     uintptr_t addr, size_t size)
 {
 	int ret;
 
 	ret = globalize_page_range(ptables, &kernel_ptables, addr, size, name);
 	__ASSERT(ret == 0, "globalize_page_range() returned %d", ret);
-	if (is_ptable_active(ptables)) {
-		invalidate_tlb_all();
-	}
+	invalidate_tlb_all();
+
+	return ret;
 }
 
-void arch_mem_domain_partition_add(struct k_mem_domain *domain,
-				   uint32_t partition_id)
+int arch_mem_domain_partition_add(struct k_mem_domain *domain,
+				  uint32_t partition_id)
 {
 	struct arm_mmu_ptables *domain_ptables = &domain->arch.ptables;
 	struct k_mem_partition *ptn = &domain->partitions[partition_id];
 
-	private_map(domain_ptables, "partition", ptn->start, ptn->start,
-		    ptn->size, ptn->attr.attrs | MT_NORMAL);
+	return private_map(domain_ptables, "partition", ptn->start, ptn->start,
+			   ptn->size, ptn->attr.attrs | MT_NORMAL);
 }
 
-void arch_mem_domain_partition_remove(struct k_mem_domain *domain,
-				      uint32_t partition_id)
+int arch_mem_domain_partition_remove(struct k_mem_domain *domain,
+				     uint32_t partition_id)
 {
 	struct arm_mmu_ptables *domain_ptables = &domain->arch.ptables;
 	struct k_mem_partition *ptn = &domain->partitions[partition_id];
 
-	reset_map(domain_ptables, "partition removal", ptn->start, ptn->size);
+	return reset_map(domain_ptables, "partition removal",
+			 ptn->start, ptn->size);
 }
 
-static void map_thread_stack(struct k_thread *thread,
-			     struct arm_mmu_ptables *ptables)
+static int map_thread_stack(struct k_thread *thread,
+			    struct arm_mmu_ptables *ptables)
 {
-	private_map(ptables, "thread_stack", thread->stack_info.start,
-		    thread->stack_info.start, thread->stack_info.size,
-		    MT_P_RW_U_RW | MT_NORMAL);
+	return private_map(ptables, "thread_stack", thread->stack_info.start,
+			    thread->stack_info.start, thread->stack_info.size,
+			    MT_P_RW_U_RW | MT_NORMAL);
 }
 
-void arch_mem_domain_thread_add(struct k_thread *thread)
+int arch_mem_domain_thread_add(struct k_thread *thread)
 {
 	struct arm_mmu_ptables *old_ptables, *domain_ptables;
 	struct k_mem_domain *domain;
 	bool is_user, is_migration;
+	int ret = 0;
 
 	domain = thread->mem_domain_info.mem_domain;
 	domain_ptables = &domain->arch.ptables;
@@ -1026,28 +1139,28 @@ void arch_mem_domain_thread_add(struct k_thread *thread)
 	is_migration = (old_ptables != NULL) && is_user;
 
 	if (is_migration) {
-		map_thread_stack(thread, domain_ptables);
+		ret = map_thread_stack(thread, domain_ptables);
 	}
 
 	thread->arch.ptables = domain_ptables;
 	if (thread == _current) {
-		if (!is_ptable_active(domain_ptables)) {
-			z_arm64_swap_ptables(thread);
-		}
+		z_arm64_swap_ptables(thread);
 	} else {
 #ifdef CONFIG_SMP
 		/* the thread could be running on another CPU right now */
-		z_arm64_ptable_ipi();
+		z_arm64_mem_cfg_ipi();
 #endif
 	}
 
 	if (is_migration) {
-		reset_map(old_ptables, __func__, thread->stack_info.start,
+		ret = reset_map(old_ptables, __func__, thread->stack_info.start,
 				thread->stack_info.size);
 	}
+
+	return ret;
 }
 
-void arch_mem_domain_thread_remove(struct k_thread *thread)
+int arch_mem_domain_thread_remove(struct k_thread *thread)
 {
 	struct arm_mmu_ptables *domain_ptables;
 	struct k_mem_domain *domain;
@@ -1056,27 +1169,35 @@ void arch_mem_domain_thread_remove(struct k_thread *thread)
 	domain_ptables = &domain->arch.ptables;
 
 	if ((thread->base.user_options & K_USER) == 0) {
-		return;
+		return 0;
 	}
 
 	if ((thread->base.thread_state & _THREAD_DEAD) == 0) {
-		return;
+		return 0;
 	}
 
-	reset_map(domain_ptables, __func__, thread->stack_info.start,
-		  thread->stack_info.size);
+	return reset_map(domain_ptables, __func__, thread->stack_info.start,
+			 thread->stack_info.size);
 }
 
-void z_arm64_swap_ptables(struct k_thread *incoming)
+static void z_arm64_swap_ptables(struct k_thread *incoming)
 {
 	struct arm_mmu_ptables *ptables = incoming->arch.ptables;
+	uint64_t curr_ttbr0 = read_ttbr0_el1();
+	uint64_t new_ttbr0 = ptables->ttbr0;
 
-	if (!is_ptable_active(ptables)) {
-		z_arm64_set_ttbr0((uintptr_t)ptables->base_xlat_table);
+	if (curr_ttbr0 == new_ttbr0) {
+		return; /* Already the right tables */
+	}
+
+	z_arm64_set_ttbr0(new_ttbr0);
+
+	if (get_asid(curr_ttbr0) == get_asid(new_ttbr0)) {
+		invalidate_tlb_all();
 	}
 }
 
-void z_arm64_thread_pt_init(struct k_thread *incoming)
+void z_arm64_thread_mem_domains_init(struct k_thread *incoming)
 {
 	struct arm_mmu_ptables *ptables;
 
@@ -1088,6 +1209,11 @@ void z_arm64_thread_pt_init(struct k_thread *incoming)
 	/* Map the thread stack */
 	map_thread_stack(incoming, ptables);
 
+	z_arm64_swap_ptables(incoming);
+}
+
+void z_arm64_swap_mem_domains(struct k_thread *incoming)
+{
 	z_arm64_swap_ptables(incoming);
 }
 

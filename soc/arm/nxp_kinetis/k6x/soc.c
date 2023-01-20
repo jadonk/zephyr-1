@@ -13,15 +13,17 @@
  * hardware for the fsl_frdm_k64f platform.
  */
 
-#include <kernel.h>
-#include <device.h>
-#include <init.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/init.h>
 #include <soc.h>
-#include <drivers/uart.h>
+#include <zephyr/drivers/uart.h>
 #include <fsl_common.h>
 #include <fsl_clock.h>
-#include <arch/cpu.h>
-#include <arch/arm/aarch32/cortex_m/cmsis.h>
+#include <zephyr/arch/cpu.h>
+#include <zephyr/arch/arm/aarch32/cortex_m/cmsis.h>
+
+#define LPUART0SRC_OSCERCLK     (1)
 
 #define TIMESRC_OSCERCLK        (2)
 
@@ -84,8 +86,6 @@ static const sim_clock_config_t simConfig = {
  * PLL Engaged External (PEE) mode and generate the maximum 120 MHz system
  * clock.
  *
- * @return N/A
- *
  */
 static ALWAYS_INLINE void clock_init(void)
 {
@@ -101,13 +101,17 @@ static ALWAYS_INLINE void clock_init(void)
 
 	CLOCK_SetSimConfig(&simConfig);
 
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(lpuart0), okay)
+	CLOCK_SetLpuartClock(LPUART0SRC_OSCERCLK);
+#endif
+
 #if CONFIG_ETH_MCUX
 	CLOCK_SetEnetTime0Clock(TIMESRC_OSCERCLK);
 #endif
 #if CONFIG_ETH_MCUX_RMII_EXT_CLK
 	CLOCK_SetRmii0Clock(1);
 #endif
-#if CONFIG_USB_KINETIS
+#if CONFIG_USB_KINETIS || CONFIG_UDC_KINETIS
 	CLOCK_EnableUsbfs0Clock(kCLOCK_UsbSrcPll0,
 				DT_PROP(DT_PATH(cpus, cpu_0), clock_frequency));
 #endif

@@ -12,11 +12,11 @@
 #define LOG_MODULE_NAME net_ipso_timer
 #define LOG_LEVEL CONFIG_LWM2M_LOG_LEVEL
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
 #include <stdint.h>
-#include <init.h>
+#include <zephyr/init.h>
 
 #include "lwm2m_object.h"
 #include "lwm2m_engine.h"
@@ -46,10 +46,10 @@ enum ipso_timer_mode {
 
 /* resource state */
 struct ipso_timer_data {
-	float32_value_t delay_duration;
-	float32_value_t remaining_time;
-	float32_value_t min_off_time;
-	float32_value_t cumulative_time;
+	double delay_duration;
+	double remaining_time;
+	double min_off_time;
+	double cumulative_time;
 
 	uint64_t trigger_offset;
 	uint32_t trigger_counter;
@@ -85,22 +85,6 @@ static struct lwm2m_engine_res res[MAX_INSTANCE_COUNT][TIMER_MAX_ID];
 static struct lwm2m_engine_res_inst
 		res_inst[MAX_INSTANCE_COUNT][RESOURCE_INSTANCE_COUNT];
 
-static int ms2float(uint32_t ms, float32_value_t *f)
-{
-	f->val1 = ms / MSEC_PER_SEC;
-	f->val2 = (ms % MSEC_PER_SEC) * (LWM2M_FLOAT32_DEC_MAX / MSEC_PER_SEC);
-
-	return 0;
-}
-
-static int float2ms(float32_value_t *f, uint32_t *ms)
-{
-	*ms = f->val1 * MSEC_PER_SEC;
-	*ms += f->val2 / (LWM2M_FLOAT32_DEC_MAX / MSEC_PER_SEC);
-
-	return 0;
-}
-
 static int get_timer_index(uint16_t obj_inst_id)
 {
 	int i, ret = -ENOENT;
@@ -120,7 +104,8 @@ static int get_timer_index(uint16_t obj_inst_id)
 static int start_timer(struct ipso_timer_data *timer)
 {
 	uint32_t temp = 0U;
-	char path[MAX_RESOURCE_LEN];
+	struct lwm2m_obj_path path = LWM2M_OBJ(IPSO_OBJECT_TIMER_ID, timer->obj_inst_id,
+					       DIGITAL_STATE_RID);
 
 	/* make sure timer is enabled and not already active */
 	if (timer->timer_mode == TIMER_MODE_OFF || timer->active ||
@@ -129,7 +114,7 @@ static int start_timer(struct ipso_timer_data *timer)
 	}
 
 	/* check min off time from last trigger_offset */
-	float2ms(&timer->min_off_time, &temp);
+	temp = timer->min_off_time * MSEC_PER_SEC;
 	if (k_uptime_get() < timer->trigger_offset + temp) {
 		return -EINVAL;
 	}
@@ -139,11 +124,9 @@ static int start_timer(struct ipso_timer_data *timer)
 	timer->trigger_offset = k_uptime_get();
 	timer->trigger_counter += 1U;
 
-	snprintk(path, MAX_RESOURCE_LEN, "%d/%u/%d", IPSO_OBJECT_TIMER_ID,
-		 timer->obj_inst_id, DIGITAL_STATE_RID);
-	lwm2m_engine_set_bool(path, true);
+	lwm2m_set_bool(&path, true);
 
-	float2ms(&timer->delay_duration, &temp);
+	temp = timer->delay_duration * MSEC_PER_SEC;
 	k_work_reschedule(&timer->timer_work, K_MSEC(temp));
 
 	return 0;
@@ -151,7 +134,8 @@ static int start_timer(struct ipso_timer_data *timer)
 
 static int stop_timer(struct ipso_timer_data *timer, bool cancel)
 {
-	char path[MAX_RESOURCE_LEN];
+	struct lwm2m_obj_path path = LWM2M_OBJ(IPSO_OBJECT_TIMER_ID, timer->obj_inst_id,
+					       DIGITAL_STATE_RID);
 
 	/* make sure timer is active */
 	if (!timer->active) {
@@ -159,9 +143,7 @@ static int stop_timer(struct ipso_timer_data *timer, bool cancel)
 	}
 
 	timer->cumulative_time_ms += k_uptime_get() - timer->trigger_offset;
-	snprintk(path, MAX_RESOURCE_LEN, "%d/%u/%d", IPSO_OBJECT_TIMER_ID,
-		 timer->obj_inst_id, DIGITAL_STATE_RID);
-	lwm2m_engine_set_bool(path, false);
+	lwm2m_set_bool(&path, false);
 
 	if (cancel) {
 		k_work_cancel_delayable(&timer->timer_work);
@@ -183,12 +165,11 @@ static void *remaining_time_read_cb(uint16_t obj_inst_id,
 	}
 
 	if (timer_data[i].active) {
-		float2ms(&timer_data[i].delay_duration, &temp);
+		temp = timer_data[i].delay_duration * MSEC_PER_SEC;
 		temp -= (k_uptime_get() - timer_data[i].trigger_offset);
-		ms2float(temp, &timer_data[i].remaining_time);
+		timer_data[i].remaining_time = (double)temp / MSEC_PER_SEC;
 	} else {
-		timer_data[i].remaining_time.val1 = 0;
-		timer_data[i].remaining_time.val2 = 0;
+		timer_data[i].remaining_time = 0;
 	}
 
 	*data_len = sizeof(timer_data[i].remaining_time);
@@ -212,7 +193,7 @@ static void *cumulative_time_read_cb(uint16_t obj_inst_id,
 		temp += k_uptime_get() - timer_data[i].trigger_offset;
 	}
 
-	ms2float(temp, &timer_data[i].cumulative_time);
+	timer_data[i].cumulative_time = (double)temp / MSEC_PER_SEC;
 
 	*data_len = sizeof(timer_data[i].cumulative_time);
 	return &timer_data[i].cumulative_time;
@@ -272,7 +253,8 @@ static int trigger_counter_post_write_cb(uint16_t obj_inst_id,
 
 static void timer_work_cb(struct k_work *work)
 {
-	struct ipso_timer_data *timer = CONTAINER_OF(work,
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct ipso_timer_data *timer = CONTAINER_OF(dwork,
 						     struct ipso_timer_data,
 						     timer_work);
 	stop_timer(timer, false);
@@ -291,7 +273,7 @@ static int timer_trigger_cb(uint16_t obj_inst_id,
 	return start_timer(&timer_data[i]);
 }
 
-static struct lwm2m_engine_obj_inst *timer_create(uint16_t obj_inst_id)
+static struct lwm2m_engine_obj_inst *timer_inst_create(uint16_t obj_inst_id)
 {
 	int index, avail = -1, i = 0, j = 0;
 
@@ -318,7 +300,7 @@ static struct lwm2m_engine_obj_inst *timer_create(uint16_t obj_inst_id)
 	/* Set default values */
 	(void)memset(&timer_data[avail], 0, sizeof(timer_data[avail]));
 	k_work_init_delayable(&timer_data[avail].timer_work, timer_work_cb);
-	timer_data[avail].delay_duration.val1 = 5; /* 5 seconds */
+	timer_data[avail].delay_duration = 5; /* 5 seconds */
 	timer_data[avail].enabled = true;
 	timer_data[avail].timer_mode = TIMER_MODE_ONE_SHOT;
 	timer_data[avail].obj_inst_id = obj_inst_id;
@@ -378,7 +360,7 @@ static int ipso_timer_init(const struct device *dev)
 	timer.fields = fields;
 	timer.field_count = ARRAY_SIZE(fields);
 	timer.max_instance_count = MAX_INSTANCE_COUNT;
-	timer.create_cb = timer_create;
+	timer.create_cb = timer_inst_create;
 	lwm2m_register_obj(&timer);
 
 	return 0;

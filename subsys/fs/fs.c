@@ -10,15 +10,15 @@
 #include <string.h>
 #include <zephyr/types.h>
 #include <errno.h>
-#include <init.h>
-#include <fs/fs.h>
-#include <fs/fs_sys.h>
-#include <sys/check.h>
-#include <sys/stat.h>
+#include <zephyr/init.h>
+#include <zephyr/kernel.h>
+#include <zephyr/fs/fs.h>
+#include <zephyr/fs/fs_sys.h>
+#include <zephyr/sys/check.h>
 
 
 #define LOG_LEVEL CONFIG_FS_LOG_LEVEL
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(fs);
 
 /* list of mounted file systems */
@@ -122,8 +122,9 @@ static int fs_get_mnt_point(struct fs_mount_t **mnt_pntp,
 	}
 
 	*mnt_pntp = mnt_p;
-	if (match_len)
+	if (match_len) {
 		*match_len = mnt_p->mountp_len;
+	}
 
 	return 0;
 }
@@ -133,9 +134,6 @@ int fs_open(struct fs_file_t *zfp, const char *file_name, fs_mode_t flags)
 {
 	struct fs_mount_t *mp;
 	int rc = -EINVAL;
-
-	/* COpy flags to zfp for use with other fs_ API calls */
-	zfp->flags = flags;
 
 	if ((file_name == NULL) ||
 			(strlen(file_name) <= 1) || (file_name[0] != '/')) {
@@ -169,6 +167,9 @@ int fs_open(struct fs_file_t *zfp, const char *file_name, fs_mode_t flags)
 		zfp->mp = NULL;
 		return rc;
 	}
+
+	/* Copy flags to zfp for use with other fs_ API calls */
+	zfp->flags = flags;
 
 	return rc;
 }
@@ -324,7 +325,7 @@ int fs_opendir(struct fs_dir_t *zdp, const char *abs_path)
 
 	if ((abs_path == NULL) ||
 			(strlen(abs_path) < 1) || (abs_path[0] != '/')) {
-		LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid directory name!!");
 		return -EINVAL;
 	}
 
@@ -480,7 +481,7 @@ int fs_mkdir(const char *abs_path)
 
 	if ((abs_path == NULL) ||
 			(strlen(abs_path) <= 1) || (abs_path[0] != '/')) {
-		LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid directory name!!");
 		return -EINVAL;
 	}
 
@@ -586,7 +587,7 @@ int fs_stat(const char *abs_path, struct fs_dirent *entry)
 
 	if ((abs_path == NULL) ||
 			(strlen(abs_path) <= 1) || (abs_path[0] != '/')) {
-		LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file or dir name!!");
 		return -EINVAL;
 	}
 
@@ -616,7 +617,7 @@ int fs_statvfs(const char *abs_path, struct fs_statvfs *stat)
 
 	if ((abs_path == NULL) ||
 			(strlen(abs_path) <= 1) || (abs_path[0] != '/')) {
-		LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file or dir name!!");
 		return -EINVAL;
 	}
 
@@ -626,11 +627,13 @@ int fs_statvfs(const char *abs_path, struct fs_statvfs *stat)
 		return rc;
 	}
 
-	if (mp->fs->statvfs != NULL) {
-		rc = mp->fs->statvfs(mp, abs_path, stat);
-		if (rc < 0) {
-			LOG_ERR("failed get file or dir stat (%d)", rc);
-		}
+	CHECKIF(mp->fs->statvfs == NULL) {
+		return -ENOTSUP;
+	}
+
+	rc = mp->fs->statvfs(mp, abs_path, stat);
+	if (rc < 0) {
+		LOG_ERR("failed get file or dir stat (%d)", rc);
 	}
 
 	return rc;
@@ -650,6 +653,11 @@ int fs_mount(struct fs_mount_t *mp)
 	if ((mp == NULL) || (mp->mnt_point == NULL)) {
 		LOG_ERR("mount point not initialized!!");
 		return -EINVAL;
+	}
+
+	if (sys_dnode_is_linked(&mp->node)) {
+		LOG_ERR("file system already mounted!!");
+		return -EBUSY;
 	}
 
 	len = strlen(mp->mnt_point);
@@ -692,7 +700,7 @@ int fs_mount(struct fs_mount_t *mp)
 
 	if (fs->unmount == NULL) {
 		LOG_WRN("mount path %s is not unmountable",
-			log_strdup(mp->mnt_point));
+			mp->mnt_point);
 	}
 
 	rc = fs->mount(mp);
@@ -706,13 +714,49 @@ int fs_mount(struct fs_mount_t *mp)
 	mp->fs = fs;
 
 	sys_dlist_append(&fs_mnt_list, &mp->node);
-	LOG_DBG("fs mounted at %s", log_strdup(mp->mnt_point));
+	LOG_DBG("fs mounted at %s", mp->mnt_point);
 
 mount_err:
 	k_mutex_unlock(&mutex);
 	return rc;
 }
 
+#if defined(CONFIG_FILE_SYSTEM_MKFS)
+
+int fs_mkfs(int fs_type, uintptr_t dev_id, void *cfg, int flags)
+{
+	int rc = -EINVAL;
+	const struct fs_file_system_t *fs;
+
+	k_mutex_lock(&mutex, K_FOREVER);
+
+	/* Get file system information */
+	fs = fs_type_get(fs_type);
+	if (fs == NULL) {
+		LOG_ERR("fs type %d not registered!!",
+				fs_type);
+		rc = -ENOENT;
+		goto mount_err;
+	}
+
+	CHECKIF(fs->mkfs == NULL) {
+		LOG_ERR("fs type %d does not support mkfs", fs_type);
+		rc = -ENOTSUP;
+		goto mount_err;
+	}
+
+	rc = fs->mkfs(dev_id, cfg, flags);
+	if (rc < 0) {
+		LOG_ERR("mkfs error (%d)", rc);
+		goto mount_err;
+	}
+
+mount_err:
+	k_mutex_unlock(&mutex);
+	return rc;
+}
+
+#endif /* CONFIG_FILE_SYSTEM_MKFS */
 
 int fs_unmount(struct fs_mount_t *mp)
 {
@@ -724,7 +768,7 @@ int fs_unmount(struct fs_mount_t *mp)
 
 	k_mutex_lock(&mutex, K_FOREVER);
 
-	if (mp->fs == NULL) {
+	if (!sys_dnode_is_linked(&mp->node)) {
 		LOG_ERR("fs not mounted (mp == %p)", mp);
 		goto unmount_err;
 	}
@@ -746,7 +790,7 @@ int fs_unmount(struct fs_mount_t *mp)
 
 	/* remove mount node from the list */
 	sys_dlist_remove(&mp->node);
-	LOG_DBG("fs unmounted from %s", log_strdup(mp->mnt_point));
+	LOG_DBG("fs unmounted from %s", mp->mnt_point);
 
 unmount_err:
 	k_mutex_unlock(&mutex);

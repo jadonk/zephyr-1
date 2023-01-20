@@ -5,19 +5,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr.h>
-#include <debug/stack.h>
-#include <sys/util.h>
+#include <zephyr/kernel.h>
+#include <zephyr/debug/stack.h>
+#include <zephyr/sys/util.h>
 
-#include <net/buf.h>
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/mesh.h>
+#include <zephyr/net/buf.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/mesh.h>
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG_ADV)
-#define LOG_MODULE_NAME bt_mesh_adv_legacy
-#include "common/log.h"
+#include "common/bt_str.h"
 
 #include "host/hci_core.h"
 
@@ -27,7 +25,10 @@
 #include "beacon.h"
 #include "host/ecc.h"
 #include "prov.h"
-#include "proxy.h"
+
+#define LOG_LEVEL CONFIG_BT_MESH_ADV_LOG_LEVEL
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(bt_mesh_adv_legacy);
 
 /* Pre-5.0 controllers enforce a minimum interval of 100ms
  * whereas 5.0+ controllers can go down to 20ms.
@@ -76,11 +77,10 @@ static inline void adv_send(struct net_buf *buf)
 		duration += BT_MESH_SCAN_WINDOW_MS;
 	}
 
-	BT_DBG("type %u len %u: %s", BT_MESH_ADV(buf)->type,
-	       buf->len, bt_hex(buf->data, buf->len));
-	BT_DBG("count %u interval %ums duration %ums",
-	       BT_MESH_TRANSMIT_COUNT(BT_MESH_ADV(buf)->xmit) + 1, adv_int,
-	       duration);
+	LOG_DBG("type %u len %u: %s", BT_MESH_ADV(buf)->type, buf->len,
+		bt_hex(buf->data, buf->len));
+	LOG_DBG("count %u interval %ums duration %ums",
+		BT_MESH_TRANSMIT_COUNT(BT_MESH_ADV(buf)->xmit) + 1, adv_int, duration);
 
 	ad.type = bt_mesh_adv_type[BT_MESH_ADV(buf)->type];
 	ad.data_len = buf->len;
@@ -105,47 +105,45 @@ static inline void adv_send(struct net_buf *buf)
 	bt_mesh_adv_send_start(duration, err, BT_MESH_ADV(buf));
 
 	if (err) {
-		BT_ERR("Advertising failed: err %d", err);
+		LOG_ERR("Advertising failed: err %d", err);
 		return;
 	}
 
-	BT_DBG("Advertising started. Sleeping %u ms", duration);
+	LOG_DBG("Advertising started. Sleeping %u ms", duration);
 
 	k_sleep(K_MSEC(duration));
 
 	err = bt_le_adv_stop();
 	if (err) {
-		BT_ERR("Stopping advertising failed: err %d", err);
+		LOG_ERR("Stopping advertising failed: err %d", err);
 		return;
 	}
 
-	BT_DBG("Advertising stopped (%u ms)", (uint32_t) k_uptime_delta(&time));
+	LOG_DBG("Advertising stopped (%u ms)", (uint32_t) k_uptime_delta(&time));
 }
 
 static void adv_thread(void *p1, void *p2, void *p3)
 {
-	BT_DBG("started");
+	LOG_DBG("started");
 
 	while (1) {
 		struct net_buf *buf;
 
 		if (IS_ENABLED(CONFIG_BT_MESH_GATT_SERVER)) {
-			buf = net_buf_get(&bt_mesh_adv_queue, K_NO_WAIT);
+			buf = bt_mesh_adv_buf_get(K_NO_WAIT);
 			while (!buf) {
 
 				/* Adv timeout may be set by a call from proxy
-				 * to bt_mesh_adv_start:
+				 * to bt_mesh_adv_gatt_start:
 				 */
 				adv_timeout = SYS_FOREVER_MS;
-				bt_mesh_proxy_adv_start();
-				BT_DBG("Proxy Advertising");
+				(void)bt_mesh_adv_gatt_send();
 
-				buf = net_buf_get(&bt_mesh_adv_queue,
-						  SYS_TIMEOUT_MS(adv_timeout));
+				buf = bt_mesh_adv_buf_get(SYS_TIMEOUT_MS(adv_timeout));
 				bt_le_adv_stop();
 			}
 		} else {
-			buf = net_buf_get(&bt_mesh_adv_queue, K_FOREVER);
+			buf = bt_mesh_adv_buf_get(K_FOREVER);
 		}
 
 		if (!buf) {
@@ -165,16 +163,19 @@ static void adv_thread(void *p1, void *p2, void *p3)
 	}
 }
 
-void bt_mesh_adv_update(void)
-{
-	BT_DBG("");
-
-	k_fifo_cancel_wait(&bt_mesh_adv_queue);
-}
-
-void bt_mesh_adv_buf_ready(void)
+void bt_mesh_adv_buf_local_ready(void)
 {
 	/* Will be handled automatically */
+}
+
+void bt_mesh_adv_buf_relay_ready(void)
+{
+	/* Will be handled automatically */
+}
+
+void bt_mesh_adv_gatt_update(void)
+{
+	bt_mesh_adv_buf_get_cancel();
 }
 
 void bt_mesh_adv_init(void)
@@ -192,9 +193,9 @@ int bt_mesh_adv_enable(void)
 	return 0;
 }
 
-int bt_mesh_adv_start(const struct bt_le_adv_param *param, int32_t duration,
-		      const struct bt_data *ad, size_t ad_len,
-		      const struct bt_data *sd, size_t sd_len)
+int bt_mesh_adv_gatt_start(const struct bt_le_adv_param *param, int32_t duration,
+			   const struct bt_data *ad, size_t ad_len,
+			   const struct bt_data *sd, size_t sd_len)
 {
 	adv_timeout = duration;
 	return bt_le_adv_start(param, ad, ad_len, sd, sd_len);

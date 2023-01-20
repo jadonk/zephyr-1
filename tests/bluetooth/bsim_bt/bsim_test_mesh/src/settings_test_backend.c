@@ -9,16 +9,15 @@
 #include <stdio.h>
 #include <stddef.h>
 
-#include "kernel.h"
+#include <zephyr/kernel.h>
 #include "zephyr/types.h"
 #include "errno.h"
-#include "zephyr.h"
 
-#include "bluetooth/mesh.h"
+#include <zephyr/bluetooth/mesh.h>
 #include "argparse.h"
 
 #define LOG_MODULE_NAME settings_test_backend
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
 #define SETTINGS_FILE setting_file
@@ -40,9 +39,12 @@ static char setting_file_tmp[sizeof(setting_file) + 1];
 static int entry_check_and_copy(FILE *fin, FILE *fout, const char *name)
 {
 	char line[READ_LEN_MAX + 1];
+	char name_tmp[strlen(name) + 2];
+
+	snprintk(name_tmp, sizeof(name_tmp), "%s=", name);
 
 	while (fgets(line, sizeof(line), fin) == line) {
-		if (strstr(line, name) != NULL) {
+		if (strstr(line, name_tmp) != NULL) {
 			return 0;
 		}
 
@@ -120,7 +122,7 @@ static int settings_custom_load(struct settings_store *cs, const struct settings
 	return fclose(fp);
 }
 
-/* Entries are saved to optimize redability of the settings file for test development and
+/* Entries are saved to optimize readability of the settings file for test development and
  * debugging purposes. Format:
  * <entry-key>=<entry-value-hex-str>\n
  */
@@ -171,7 +173,7 @@ static int settings_custom_save(struct settings_store *cs, const char *name,
 					   (uint8_t)value[valcnt / 2]);
 		};
 
-		/* helps in making settings file redable */
+		/* helps in making settings file readable */
 		bufval[valcnt++] = '\n';
 		bufval[valcnt] = 0;
 

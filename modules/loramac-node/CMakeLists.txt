@@ -61,6 +61,7 @@ zephyr_library_sources_ifdef(CONFIG_LORAMAC_REGION_EU868
   ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionEU868.c
 )
 zephyr_library_sources_ifdef(CONFIG_LORAMAC_REGION_US915
+  ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionBaseUS.c
   ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionUS915.c
 )
 zephyr_library_sources_ifdef(CONFIG_LORAMAC_REGION_CN779
@@ -70,13 +71,19 @@ zephyr_library_sources_ifdef(CONFIG_LORAMAC_REGION_EU433
   ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionEU433.c
 )
 zephyr_library_sources_ifdef(CONFIG_LORAMAC_REGION_AU915
+  ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionBaseUS.c
   ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionAU915.c
 )
 zephyr_library_sources_ifdef(CONFIG_LORAMAC_REGION_AS923
   ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionAS923.c
 )
 zephyr_library_sources_ifdef(CONFIG_LORAMAC_REGION_CN470
+  ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionBaseUS.c
   ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionCN470.c
+  ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionCN470A20.c
+  ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionCN470A26.c
+  ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionCN470B20.c
+  ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionCN470B26.c
 )
 zephyr_library_sources_ifdef(CONFIG_LORAMAC_REGION_KR920
   ${ZEPHYR_LORAMAC_NODE_MODULE_DIR}/src/mac/region/RegionKR920.c

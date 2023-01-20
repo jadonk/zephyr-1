@@ -6,18 +6,14 @@
  */
 
 #include <soc.h>
-#include <sys/onoff.h>
-#include <drivers/clock_control.h>
-#include <drivers/clock_control/nrf_clock_control.h>
+#include <zephyr/sys/onoff.h>
+#include <zephyr/drivers/clock_control.h>
+#include <zephyr/drivers/clock_control/nrf_clock_control.h>
 #include "nrf_clock_calibration.h"
 #include <nrfx_clock.h>
-#include <logging/log.h>
-#include <shell/shell.h>
-
-#if defined(CONFIG_SOC_NRF5340_CPUAPP) && \
-	!defined(CONFIG_TRUSTED_EXECUTION_NONSECURE)
-#include <hal/nrf_gpio.h>
-#endif
+#include <zephyr/logging/log.h>
+#include <zephyr/shell/shell.h>
+#include <zephyr/irq.h>
 
 LOG_MODULE_REGISTER(clock_control, CONFIG_CLOCK_CONTROL_LOG_LEVEL);
 
@@ -131,7 +127,7 @@ static enum clock_control_status get_status(const struct device *dev,
 static int set_off_state(uint32_t *flags, uint32_t ctx)
 {
 	int err = 0;
-	int key = irq_lock();
+	unsigned int key = irq_lock();
 	uint32_t current_ctx = GET_CTX(*flags);
 
 	if ((current_ctx != 0) && (current_ctx != ctx)) {
@@ -148,7 +144,7 @@ static int set_off_state(uint32_t *flags, uint32_t ctx)
 static int set_starting_state(uint32_t *flags, uint32_t ctx)
 {
 	int err = 0;
-	int key = irq_lock();
+	unsigned int key = irq_lock();
 	uint32_t current_ctx = GET_CTX(*flags);
 
 	if ((*flags & (STATUS_MASK)) == CLOCK_CONTROL_STATUS_OFF) {
@@ -166,7 +162,7 @@ static int set_starting_state(uint32_t *flags, uint32_t ctx)
 
 static void set_on_state(uint32_t *flags)
 {
-	int key = irq_lock();
+	unsigned int key = irq_lock();
 
 	*flags = CLOCK_CONTROL_STATUS_ON | GET_CTX(*flags);
 	irq_unlock(key);
@@ -211,8 +207,7 @@ static void lfclk_start(void)
 
 static void lfclk_stop(void)
 {
-	if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC_CALIBRATION) &&
-	    !IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_FORCE_ALT)) {
+	if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_DRIVER_CALIBRATION)) {
 		z_nrf_clock_calibration_lfclk_stopped();
 	}
 
@@ -272,7 +267,7 @@ static void generic_hfclk_start(void)
 {
 	nrf_clock_hfclk_t type;
 	bool already_started = false;
-	int key = irq_lock();
+	unsigned int key = irq_lock();
 
 	hfclk_users |= HF_USER_GENERIC;
 	if (hfclk_users & HF_USER_BT) {
@@ -300,12 +295,21 @@ static void generic_hfclk_start(void)
 
 static void generic_hfclk_stop(void)
 {
-	if (atomic_and(&hfclk_users, ~HF_USER_GENERIC) & HF_USER_BT) {
-		/* bt still requesting the clock. */
-		return;
+	/* It's not enough to use only atomic_and() here for synchronization,
+	 * as the thread could be preempted right after that function but
+	 * before hfclk_stop() is called and the preempting code could request
+	 * the HFCLK again. Then, the HFCLK would be stopped inappropriately
+	 * and hfclk_user would be left with an incorrect value.
+	 */
+	unsigned int key = irq_lock();
+
+	hfclk_users &= ~HF_USER_GENERIC;
+	/* Skip stopping if BT is still requesting the clock. */
+	if (!(hfclk_users & HF_USER_BT)) {
+		hfclk_stop();
 	}
 
-	hfclk_stop();
+	irq_unlock(key);
 }
 
 
@@ -321,12 +325,18 @@ void z_nrf_clock_bt_ctlr_hf_request(void)
 
 void z_nrf_clock_bt_ctlr_hf_release(void)
 {
-	if (atomic_and(&hfclk_users, ~HF_USER_BT) & HF_USER_GENERIC) {
-		/* generic still requesting the clock. */
-		return;
+	/* It's not enough to use only atomic_and() here for synchronization,
+	 * see the explanation in generic_hfclk_stop().
+	 */
+	unsigned int key = irq_lock();
+
+	hfclk_users &= ~HF_USER_BT;
+	/* Skip stopping if generic is still requesting the clock. */
+	if (!(hfclk_users & HF_USER_GENERIC)) {
+		hfclk_stop();
 	}
 
-	hfclk_stop();
+	irq_unlock(key);
 }
 
 static int stop(const struct device *dev, clock_control_subsys_t subsys,
@@ -599,15 +609,13 @@ static void clock_event_handler(nrfx_clock_evt_type_t event)
 		break;
 #endif
 	case NRFX_CLOCK_EVT_LFCLK_STARTED:
-		if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC_CALIBRATION) &&
-		    !IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_FORCE_ALT)) {
+		if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_DRIVER_CALIBRATION)) {
 			z_nrf_clock_calibration_lfclk_started();
 		}
 		clkstarted_handle(dev, CLOCK_CONTROL_NRF_TYPE_LFCLK);
 		break;
 	case NRFX_CLOCK_EVT_CAL_DONE:
-		if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC_CALIBRATION) &&
-		    !IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_FORCE_ALT)) {
+		if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_DRIVER_CALIBRATION)) {
 			z_nrf_clock_calibration_done_handler();
 		} else {
 			/* Should not happen when calibration is disabled. */
@@ -651,7 +659,6 @@ static int clk_init(const struct device *dev)
 
 	IRQ_CONNECT(DT_INST_IRQN(0), DT_INST_IRQ(0, priority),
 		    nrfx_isr, nrfx_power_clock_irq_handler, 0);
-	irq_enable(DT_INST_IRQN(0));
 
 	nrfx_err = nrfx_clock_init(clock_event_handler);
 	if (nrfx_err != NRFX_SUCCESS) {
@@ -660,8 +667,7 @@ static int clk_init(const struct device *dev)
 
 	hfclkaudio_init();
 
-	if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC_CALIBRATION) &&
-	    !IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_FORCE_ALT)) {
+	if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_DRIVER_CALIBRATION)) {
 		struct nrf_clock_control_data *data = dev->data;
 
 		z_nrf_clock_calibration_init(data->mgr);
@@ -726,7 +732,7 @@ static const struct nrf_clock_control_config config = {
 
 DEVICE_DT_DEFINE(DT_NODELABEL(clock), clk_init, NULL,
 		 &data, &config,
-		 PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
+		 PRE_KERNEL_1, CONFIG_CLOCK_CONTROL_INIT_PRIORITY,
 		 &clock_control_api);
 
 static int cmd_status(const struct shell *shell, size_t argc, char **argv)
@@ -741,7 +747,7 @@ static int cmd_status(const struct shell *shell, size_t argc, char **argv)
 				get_onoff_manager(CLOCK_DEVICE,
 						  CLOCK_CONTROL_NRF_TYPE_LFCLK);
 	uint32_t abs_start, abs_stop;
-	int key = irq_lock();
+	unsigned int key = irq_lock();
 	uint64_t now = k_uptime_get();
 
 	(void)nrfx_clock_is_running(NRF_CLOCK_DOMAIN_HFCLK, (void *)&hfclk_src);
@@ -772,5 +778,5 @@ SHELL_STATIC_SUBCMD_SET_CREATE(subcmds,
 
 SHELL_COND_CMD_REGISTER(CONFIG_CLOCK_CONTROL_NRF_SHELL,
 			nrf_clock_control, &subcmds,
-			"Clock control commmands",
+			"Clock control commands",
 			cmd_status);

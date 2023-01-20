@@ -9,16 +9,16 @@
 #define LOG_MODULE_NAME net_buf
 #define LOG_LEVEL CONFIG_NET_BUF_LOG_LEVEL
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
 #include <stdio.h>
 #include <errno.h>
 #include <stddef.h>
 #include <string.h>
-#include <sys/byteorder.h>
+#include <zephyr/sys/byteorder.h>
 
-#include <net/buf.h>
+#include <zephyr/net/buf.h>
 
 #if defined(CONFIG_NET_BUF_LOG)
 #define NET_BUF_DBG(fmt, ...) LOG_DBG("(%p) " fmt, k_current_get(), \
@@ -58,18 +58,25 @@ static int pool_id(struct net_buf_pool *pool)
 int net_buf_id(struct net_buf *buf)
 {
 	struct net_buf_pool *pool = net_buf_pool_get(buf->pool_id);
+	size_t struct_size = ROUND_UP(sizeof(struct net_buf) + pool->user_data_size,
+				__alignof__(struct net_buf));
+	ptrdiff_t offset = (uint8_t *)buf - (uint8_t *)pool->__bufs;
 
-	return buf - pool->__bufs;
+	return offset / struct_size;
 }
 
 static inline struct net_buf *pool_get_uninit(struct net_buf_pool *pool,
 					      uint16_t uninit_count)
 {
+	size_t struct_size = ROUND_UP(sizeof(struct net_buf) + pool->user_data_size,
+				__alignof__(struct net_buf));
+	size_t byte_offset = (pool->buf_count - uninit_count) * struct_size;
 	struct net_buf *buf;
 
-	buf = &pool->__bufs[pool->buf_count - uninit_count];
+	buf = (struct net_buf *)(((uint8_t *)pool->__bufs) + byte_offset);
 
 	buf->pool_id = pool_id(pool);
+	buf->user_data_size = pool->user_data_size;
 
 	return buf;
 }
@@ -100,7 +107,7 @@ static uint8_t *mem_pool_data_alloc(struct net_buf *buf, size_t *size,
 	uint8_t *ref_count;
 
 	/* Reserve extra space for a ref-count (uint8_t) */
-	void *b = k_heap_alloc(pool, 1 + *size, timeout);
+	void *b = k_heap_alloc(pool, sizeof(void *) + *size, timeout);
 
 	if (b == NULL) {
 		return NULL;
@@ -110,7 +117,7 @@ static uint8_t *mem_pool_data_alloc(struct net_buf *buf, size_t *size,
 	*ref_count = 1U;
 
 	/* Return pointer to the byte following the ref count */
-	return ref_count + 1;
+	return ref_count + sizeof(void *);
 }
 
 static void mem_pool_data_unref(struct net_buf *buf, uint8_t *data)
@@ -119,7 +126,7 @@ static void mem_pool_data_unref(struct net_buf *buf, uint8_t *data)
 	struct k_heap *pool = buf_pool->alloc->alloc_data;
 	uint8_t *ref_count;
 
-	ref_count = data - 1;
+	ref_count = data - sizeof(void *);
 	if (--(*ref_count)) {
 		return;
 	}
@@ -162,21 +169,21 @@ static uint8_t *heap_data_alloc(struct net_buf *buf, size_t *size,
 {
 	uint8_t *ref_count;
 
-	ref_count = k_malloc(1 + *size);
+	ref_count = k_malloc(sizeof(void *) + *size);
 	if (!ref_count) {
 		return NULL;
 	}
 
 	*ref_count = 1U;
 
-	return ref_count + 1;
+	return ref_count + sizeof(void *);
 }
 
 static void heap_data_unref(struct net_buf *buf, uint8_t *data)
 {
 	uint8_t *ref_count;
 
-	ref_count = data - 1;
+	ref_count = data - sizeof(void *);
 	if (--(*ref_count)) {
 		return;
 	}
@@ -232,16 +239,16 @@ struct net_buf *net_buf_alloc_len(struct net_buf_pool *pool, size_t size,
 {
 	uint64_t end = sys_clock_timeout_end_calc(timeout);
 	struct net_buf *buf;
-	unsigned int key;
+	k_spinlock_key_t key;
 
 	__ASSERT_NO_MSG(pool);
 
 	NET_BUF_DBG("%s():%d: pool %p size %zu", func, line, pool, size);
 
-	/* We need to lock interrupts temporarily to prevent race conditions
+	/* We need to prevent race conditions
 	 * when accessing pool->uninit_count.
 	 */
-	key = irq_lock();
+	key = k_spin_lock(&pool->lock);
 
 	/* If there are uninitialized buffers we're guaranteed to succeed
 	 * with the allocation one way or another.
@@ -256,19 +263,19 @@ struct net_buf *net_buf_alloc_len(struct net_buf_pool *pool, size_t size,
 		if (pool->uninit_count < pool->buf_count) {
 			buf = k_lifo_get(&pool->free, K_NO_WAIT);
 			if (buf) {
-				irq_unlock(key);
+				k_spin_unlock(&pool->lock, key);
 				goto success;
 			}
 		}
 
 		uninit_count = pool->uninit_count--;
-		irq_unlock(key);
+		k_spin_unlock(&pool->lock, key);
 
 		buf = pool_get_uninit(pool, uninit_count);
 		goto success;
 	}
 
-	irq_unlock(key);
+	k_spin_unlock(&pool->lock, key);
 
 #if defined(CONFIG_NET_BUF_LOG) && (CONFIG_NET_BUF_LOG_LEVEL >= LOG_LEVEL_WRN)
 	if (K_TIMEOUT_EQ(timeout, K_FOREVER)) {
@@ -405,7 +412,7 @@ struct net_buf *net_buf_get_debug(struct k_fifo *fifo, k_timeout_t timeout,
 struct net_buf *net_buf_get(struct k_fifo *fifo, k_timeout_t timeout)
 #endif
 {
-	struct net_buf *buf, *frag;
+	struct net_buf *buf;
 
 	NET_BUF_DBG("%s():%d: fifo %p", func, line, fifo);
 
@@ -415,18 +422,6 @@ struct net_buf *net_buf_get(struct k_fifo *fifo, k_timeout_t timeout)
 	}
 
 	NET_BUF_DBG("%s():%d: buf %p fifo %p", func, line, buf, fifo);
-
-	/* Get any fragments belonging to this buffer */
-	for (frag = buf; (frag->flags & NET_BUF_FRAGS); frag = frag->frags) {
-		frag->frags = k_fifo_get(fifo, K_NO_WAIT);
-		__ASSERT_NO_MSG(frag->frags);
-
-		/* The fragments flag is only for FIFO-internal usage */
-		frag->flags &= ~NET_BUF_FRAGS;
-	}
-
-	/* Mark the end of the fragment list */
-	frag->frags = NULL;
 
 	return buf;
 }
@@ -449,68 +444,42 @@ void net_buf_simple_reserve(struct net_buf_simple *buf, size_t reserve)
 	buf->data = buf->__buf + reserve;
 }
 
+static struct k_spinlock net_buf_slist_lock;
+
 void net_buf_slist_put(sys_slist_t *list, struct net_buf *buf)
 {
-	struct net_buf *tail;
-	unsigned int key;
+	k_spinlock_key_t key;
 
 	__ASSERT_NO_MSG(list);
 	__ASSERT_NO_MSG(buf);
 
-	for (tail = buf; tail->frags; tail = tail->frags) {
-		tail->flags |= NET_BUF_FRAGS;
-	}
-
-	key = irq_lock();
-	sys_slist_append_list(list, &buf->node, &tail->node);
-	irq_unlock(key);
+	key = k_spin_lock(&net_buf_slist_lock);
+	sys_slist_append(list, &buf->node);
+	k_spin_unlock(&net_buf_slist_lock, key);
 }
 
 struct net_buf *net_buf_slist_get(sys_slist_t *list)
 {
-	struct net_buf *buf, *frag;
-	unsigned int key;
+	struct net_buf *buf;
+	k_spinlock_key_t key;
 
 	__ASSERT_NO_MSG(list);
 
-	key = irq_lock();
+	key = k_spin_lock(&net_buf_slist_lock);
+
 	buf = (void *)sys_slist_get(list);
-	irq_unlock(key);
 
-	if (!buf) {
-		return NULL;
-	}
-
-	/* Get any fragments belonging to this buffer */
-	for (frag = buf; (frag->flags & NET_BUF_FRAGS); frag = frag->frags) {
-		key = irq_lock();
-		frag->frags = (void *)sys_slist_get(list);
-		irq_unlock(key);
-
-		__ASSERT_NO_MSG(frag->frags);
-
-		/* The fragments flag is only for list-internal usage */
-		frag->flags &= ~NET_BUF_FRAGS;
-	}
-
-	/* Mark the end of the fragment list */
-	frag->frags = NULL;
+	k_spin_unlock(&net_buf_slist_lock, key);
 
 	return buf;
 }
 
 void net_buf_put(struct k_fifo *fifo, struct net_buf *buf)
 {
-	struct net_buf *tail;
-
 	__ASSERT_NO_MSG(fifo);
 	__ASSERT_NO_MSG(buf);
 
-	for (tail = buf; tail->frags; tail = tail->frags) {
-		tail->flags |= NET_BUF_FRAGS;
-	}
-
-	k_fifo_put_list(fifo, buf, tail);
+	k_fifo_put(fifo, buf);
 }
 
 #if defined(CONFIG_NET_BUF_LOG)

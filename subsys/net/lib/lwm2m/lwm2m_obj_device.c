@@ -13,12 +13,12 @@
 #define LOG_MODULE_NAME net_lwm2m_obj_device
 #define LOG_LEVEL CONFIG_LWM2M_LOG_LEVEL
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
 #include <string.h>
 #include <stdio.h>
-#include <init.h>
+#include <zephyr/init.h>
 
 #include "lwm2m_object.h"
 #include "lwm2m_engine.h"
@@ -90,8 +90,8 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
 /* resource state variables */
 static uint8_t  error_code_list[DEVICE_ERROR_CODE_MAX];
-static int32_t time_temp;
-static uint32_t time_offset;
+static time_t time_temp;
+static time_t time_offset;
 static uint8_t  binding_mode[DEVICE_STRING_SHORT];
 
 /* only 1 instance of device object exists */
@@ -142,6 +142,9 @@ static int reset_error_list_cb(uint16_t obj_inst_id,
 		error_code_ri[i].res_inst_id = RES_INSTANCE_NOT_CREATED;
 	}
 
+	/* Default error code indicating no error */
+	error_code_ri[0].res_inst_id = 0;
+
 	return 0;
 }
 
@@ -167,7 +170,10 @@ static int current_time_post_write_cb(uint16_t obj_inst_id, uint16_t res_id,
 				      bool last_block, size_t total_size)
 {
 	if (data_len == 4U) {
-		time_offset = *(int32_t *)data - (int32_t)(k_uptime_get() / 1000);
+		time_offset = *(uint32_t *)data - (uint32_t)(k_uptime_get() / 1000);
+		return 0;
+	} else if (data_len == 8U) {
+		time_offset = *(time_t *)data - (time_t)(k_uptime_get() / 1000);
 		return 0;
 	}
 
@@ -182,12 +188,12 @@ int lwm2m_device_add_err(uint8_t error_code)
 	int i;
 
 	for (i = 0; i < DEVICE_ERROR_CODE_MAX; i++) {
-		if (error_code_ri[i].res_inst_id == RES_INSTANCE_NOT_CREATED) {
+		if (error_code_list[i] == 0) {
 			break;
 		}
 
 		/* No duplicate error codes allowed */
-		if (*(uint8_t *)error_code_ri[i].data_ptr == error_code) {
+		if (error_code_list[i] == error_code) {
 			return 0;
 		}
 	}
@@ -198,14 +204,19 @@ int lwm2m_device_add_err(uint8_t error_code)
 
 	error_code_list[i] = error_code;
 	error_code_ri[i].res_inst_id = i;
-	NOTIFY_OBSERVER(LWM2M_OBJECT_DEVICE_ID, 0, DEVICE_ERROR_CODE_ID);
+	lwm2m_notify_observer(LWM2M_OBJECT_DEVICE_ID, 0, DEVICE_ERROR_CODE_ID);
 
 	return 0;
 }
 
 static void device_periodic_service(struct k_work *work)
 {
-	NOTIFY_OBSERVER(LWM2M_OBJECT_DEVICE_ID, 0, DEVICE_CURRENT_TIME_ID);
+	lwm2m_notify_observer(LWM2M_OBJECT_DEVICE_ID, 0, DEVICE_CURRENT_TIME_ID);
+}
+
+int lwm2m_update_device_service_period(uint32_t period_ms)
+{
+	return lwm2m_engine_update_service_period(device_periodic_service, period_ms);
 }
 
 static struct lwm2m_engine_obj_inst *device_create(uint16_t obj_inst_id)
@@ -282,6 +293,9 @@ static int lwm2m_device_init(const struct device *dev)
 	if (ret < 0) {
 		LOG_DBG("Create LWM2M instance 0 error: %d", ret);
 	}
+
+	/* Create the default error code resource instance */
+	lwm2m_device_add_err(0);
 
 	/* call device_periodic_service() every 10 seconds */
 	ret = lwm2m_engine_add_service(device_periodic_service,

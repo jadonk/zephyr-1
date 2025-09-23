@@ -165,7 +165,7 @@ static int flash_cc13xx_cc26xx_erase(const struct device *dev, off_t offs,
 static int flash_cc13xx_cc26xx_buffered_write(off_t offs, const void *data, size_t size)
 {
 	uint8_t write_buffer[WRITE_BUFFER_LEN];
-	int rc;
+	int rc = 0;
 
 	for (int i = 0; i < size; i += WRITE_BUFFER_LEN) {
 		size_t len = MIN(size - i, WRITE_BUFFER_LEN);

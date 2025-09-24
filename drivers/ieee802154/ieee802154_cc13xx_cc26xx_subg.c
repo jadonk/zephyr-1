@@ -449,7 +449,8 @@ ieee802154_cc13xx_cc26xx_subg_get_capabilities(const struct device *dev)
 {
 	/* TODO: enable IEEE802154_HW_FILTER */
 	return IEEE802154_HW_FCS |
-	       IEEE802154_HW_RX_TX_ACK | IEEE802154_HW_TX_RX_ACK;
+	       IEEE802154_HW_RX_TX_ACK |
+	       IEEE802154_HW_TX_RX_ACK;
 }
 
 static int ieee802154_cc13xx_cc26xx_subg_cca(const struct device *dev)

@@ -119,6 +119,8 @@ kconfig_to_ot_option(CONFIG_OPENTHREAD_PLATFORM_KEY_REF OT_PLATFORM_KEY_REF "Ena
 kconfig_to_ot_option(CONFIG_OPENTHREAD_PLATFORM_NETIF OT_PLATFORM_NETIF "Enable platform netif support")
 kconfig_to_ot_option(CONFIG_OPENTHREAD_PLATFORM_UDP OT_PLATFORM_UDP "Enable platform UDP support")
 kconfig_to_ot_option(CONFIG_OPENTHREAD_RADIO_LINK_IEEE_802_15_4_ENABLE OT_15_4 "Enable 802.15.4 radio")
+kconfig_to_ot_option(CONFIG_OPENTHREAD_RADIO_2P4GHZ_OQPSK_SUPPORT OT_RADIO_2P4GHZ_OQPSK_SUPPORT "Enable 2.4GHz page")
+kconfig_to_ot_option(CONFIG_OPENTHREAD_RADIO_915MHZ_OQPSK_SUPPORT OT_RADIO_915MHZ_OQPSK_SUPPORT "Enable 915MHz page")
 kconfig_to_ot_option(CONFIG_OPENTHREAD_RAW OT_LINK_RAW "Enable Link Raw")
 kconfig_to_ot_option(CONFIG_OPENTHREAD_REFERENCE_DEVICE OT_REFERENCE_DEVICE "Enable Thread Certification Reference Device")
 kconfig_to_ot_option(CONFIG_OPENTHREAD_SETTINGS_RAM OT_SETTINGS_RAM "Enable volatile-only storage of settings")

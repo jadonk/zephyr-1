@@ -63,7 +63,7 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME, CONFIG_OPENTHREAD_PLATFORM_LOG_LEVEL);
 #define OT_WORKER_PRIORITY K_PRIO_PREEMPT(CONFIG_OPENTHREAD_RADIO_WORKQUEUE_PRIORITY)
 #endif
 
-#define CHANNEL_COUNT OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MAX - OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN + 1
+#define CHANNEL_COUNT OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MAX - OT_RADIO_915MHZ_OQPSK_CHANNEL_MIN + 1
 
 /* PHY header duration in us (i.e. 2 symbol periods @ 62.5k symbol rate), see
  * IEEE 802.15.4, sections 12.1.3.1, 12.2.5 and 12.3.3.
@@ -127,10 +127,10 @@ static int8_t get_transmit_power_for_channel(uint8_t aChannel)
 	int8_t channel_max_power = OT_RADIO_POWER_INVALID;
 	int8_t power = 0; /* 0 dbm as default value */
 
-	if (aChannel >= OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN &&
+	if (aChannel >= OT_RADIO_915MHZ_OQPSK_CHANNEL_MIN &&
 	    aChannel <= OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MAX) {
 		channel_max_power =
-			max_tx_power_table[aChannel - OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN];
+			max_tx_power_table[aChannel - OT_RADIO_915MHZ_OQPSK_CHANNEL_MIN];
 	}
 
 	if (tx_power != OT_RADIO_POWER_INVALID) {
@@ -1637,12 +1637,12 @@ otError otPlatRadioSetChannelMaxTransmitPower(otInstance *aInstance, uint8_t aCh
 {
 	ARG_UNUSED(aInstance);
 
-	if (aChannel < OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN ||
+	if (aChannel < OT_RADIO_915MHZ_OQPSK_CHANNEL_MIN ||
 	    aChannel > OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MAX) {
 		return OT_ERROR_INVALID_ARGS;
 	}
 
-	max_tx_power_table[aChannel - OT_RADIO_2P4GHZ_OQPSK_CHANNEL_MIN] = aMaxPower;
+	max_tx_power_table[aChannel - OT_RADIO_915MHZ_OQPSK_CHANNEL_MIN] = aMaxPower;
 
 	if (aChannel == channel) {
 		radio_api->set_txpower(radio_dev, get_transmit_power_for_channel(aChannel));

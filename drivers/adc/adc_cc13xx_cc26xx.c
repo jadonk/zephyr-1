@@ -79,10 +79,20 @@ static void adc_cc13xx_cc26xx_isr(const struct device *dev);
 
 static void adc_context_start_sampling(struct adc_context *ctx)
 {
+	uint32_t evflags = HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGS);
+	uint32_t adcctl = HWREG(AUX_ANAIF_BASE + AUX_ANAIF_O_ADCCTL);
 	struct adc_cc13xx_cc26xx_data *data =
 		CONTAINER_OF(ctx, struct adc_cc13xx_cc26xx_data, ctx);
 
 	data->repeat_buffer = data->buffer;
+
+	/* clear any previous events */
+	LOG_DBG("AUX_EVCTL.EVTOMCUFLAGS = 0x%08x", evflags);
+	LOG_DBG("AUX_ANAIF.ADCCTL       = 0x%08x", adcctl);
+	HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGSCLR) =
+		(AUX_EVCTL_EVTOMCUFLAGS_AUX_ADC_IRQ | AUX_EVCTL_EVTOMCUFLAGS_AUX_ADC_DONE);
+	evflags = HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGS);
+	LOG_DBG("AUX_EVCTL.EVTOMCUFLAGS = 0x%08x", evflags);
 
 	LOG_DBG("ADC start: before AUXADCEnableSync (ref=0x%08x, smpl=%u)",
 		data->ref_source, data->sample_time);
@@ -91,7 +101,6 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 
 	LOG_DBG("ADC start: after AUXADCEnableSync, before trigger");
 
-	k_busy_wait(20); /* HACK!!! */
 	AUXADCGenManualTrigger();
 
 	LOG_DBG("ADC start: after AUXADCGenManualTrigger");

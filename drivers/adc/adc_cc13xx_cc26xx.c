@@ -91,6 +91,7 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 
 	LOG_DBG("ADC start: after AUXADCEnableSync, before trigger");
 
+	k_busy_wait(20); /* HACK!!! */
 	AUXADCGenManualTrigger();
 
 	LOG_DBG("ADC start: after AUXADCGenManualTrigger");

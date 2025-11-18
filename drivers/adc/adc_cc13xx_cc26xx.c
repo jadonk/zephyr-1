@@ -28,6 +28,7 @@ LOG_MODULE_REGISTER(adc_cc13xx_cc26xx);
 #include <ti/devices/cc13x2_cc26x2/inc/hw_aux_evctl.h>
 
 #define ADC_CONTEXT_USES_KERNEL_TIMER
+#define ADC_CONTEXT_WAIT_FOR_COMPLETION_TIMEOUT K_MSEC(2)
 #include "adc_context.h"
 
 
@@ -96,6 +97,8 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 
 	LOG_DBG("ADC start: before AUXADCEnableSync (ref=0x%08x, smpl=%u)",
 		data->ref_source, data->sample_time);
+
+	k_busy_wait(200); // HACK!!!
 
 	AUXADCEnableSync(data->ref_source, data->sample_time, AUXADC_TRIGGER_MANUAL);
 

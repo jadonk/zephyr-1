@@ -84,8 +84,16 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 
 	data->repeat_buffer = data->buffer;
 
+	LOG_DBG("ADC start: before AUXADCEnableSync (ref=0x%08x, smpl=%u)",
+		data->ref_source, data->sample_time);
+
 	AUXADCEnableSync(data->ref_source, data->sample_time, AUXADC_TRIGGER_MANUAL);
+
+	LOG_DBG("ADC start: after AUXADCEnableSync, before trigger");
+
 	AUXADCGenManualTrigger();
+
+	LOG_DBG("ADC start: after AUXADCGenManualTrigger");
 }
 
 static void adc_context_update_buffer_pointer(struct adc_context *ctx,
@@ -260,10 +268,12 @@ static void adc_cc13xx_cc26xx_isr(const struct device *dev)
 	fifo_status = AUXADCGetFifoStatus();
 	LOG_DBG("ISR flags 0x%08X fifo 0x%08X", ev_status, fifo_status);
 	if ((fifo_status & (AUX_ANAIF_ADCFIFOSTAT_OVERFLOW | AUX_ANAIF_ADCFIFOSTAT_UNDERFLOW))) {
+		LOG_DBG("ISR: FIFO error, flushing");
 		AUXADCFlushFifo();
 	}
 	if ((fifo_status & AUX_ANAIF_ADCFIFOSTAT_EMPTY_M)) {
 		/* no ADC values available */
+		LOG_DBG("ISR: FIFO empty, no sample");
 		return;
 	}
 	adc_value = AUXADCPopFifo();

@@ -27,6 +27,11 @@ LOG_MODULE_REGISTER(adc_cc13xx_cc26xx);
 #include <driverlib/aux_adc.h>
 #include <ti/devices/cc13x2_cc26x2/inc/hw_aux_evctl.h>
 
+#ifdef CONFIG_PM
+#include <ti/drivers/Power.h>
+#include <ti/drivers/power/PowerCC26XX.h>
+#endif
+
 #define ADC_CONTEXT_USES_KERNEL_TIMER
 #define ADC_CONTEXT_WAIT_FOR_COMPLETION_TIMEOUT K_MSEC(2)
 #include "adc_context.h"
@@ -67,6 +72,9 @@ struct adc_cc13xx_cc26xx_data {
 	uint8_t sample_time;
 	uint16_t *buffer;
 	uint16_t *repeat_buffer;
+#ifdef CONFIG_PM
+	bool standby_disabled;
+#endif
 };
 
 struct adc_cc13xx_cc26xx_cfg {
@@ -87,19 +95,12 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 
 	data->repeat_buffer = data->buffer;
 
-	/* clear any previous events */
-	LOG_DBG("AUX_EVCTL.EVTOMCUFLAGS = 0x%08x", evflags);
-	LOG_DBG("AUX_ANAIF.ADCCTL       = 0x%08x", adcctl);
-	HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGSCLR) =
-		(AUX_EVCTL_EVTOMCUFLAGS_AUX_ADC_IRQ | AUX_EVCTL_EVTOMCUFLAGS_AUX_ADC_DONE);
-	evflags = HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGS);
-	LOG_DBG("AUX_EVCTL.EVTOMCUFLAGS = 0x%08x", evflags);
-
-	LOG_DBG("ADC start: before AUXADCEnableSync (ref=0x%08x, smpl=%u)",
-		data->ref_source, data->sample_time);
-
-	//k_busy_wait(1000); // HACK!!!
-
+#ifdef CONFIG_PM
+	if (!data->standby_disabled) {
+		Power_setConstraint(PowerCC26XX_DISALLOW_STANDBY);
+		data->standby_disabled = true;
+	}
+#endif
 	AUXADCEnableSync(data->ref_source, data->sample_time, AUXADC_TRIGGER_MANUAL);
 
 	LOG_DBG("ADC start: after AUXADCEnableSync, before trigger");
@@ -107,6 +108,17 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 	AUXADCGenManualTrigger();
 
 	LOG_DBG("ADC start: after AUXADCGenManualTrigger");
+}
+
+static void adc_stop_sampling(struct adc_cc13xx_cc26xx_data *data)
+{
+	AUXADCDisable();
+#ifdef CONFIG_PM
+	if (data->standby_disabled) {
+		Power_releaseConstraint(PowerCC26XX_DISALLOW_STANDBY);
+		data->standby_disabled = false;
+	}
+#endif
 }
 
 static void adc_context_update_buffer_pointer(struct adc_context *ctx,
@@ -130,7 +142,7 @@ static int adc_cc13xx_cc26xx_init(const struct device *dev)
 	data->dev = dev;
 
 	/* clear any previous events */
-	AUXADCDisable();
+	adc_stop_sampling(data);
 	HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGSCLR) =
 		(AUX_EVCTL_EVTOMCUFLAGS_AUX_ADC_IRQ | AUX_EVCTL_EVTOMCUFLAGS_AUX_ADC_DONE);
 
@@ -204,7 +216,7 @@ static int adc_cc13xx_cc26xx_channel_setup(const struct device *dev,
 
 	LOG_DBG("Setup %d acq time %d", ch, data->sample_time);
 
-	AUXADCDisable();
+	adc_stop_sampling(data);
 	AUXADCSelectInput(ch);
 	return 0;
 }
@@ -292,7 +304,7 @@ static void adc_cc13xx_cc26xx_isr(const struct device *dev)
 	adc_value = AUXADCPopFifo();
 	LOG_DBG("ADC buf %04X val %d", (unsigned int)data->buffer, adc_value);
 	*data->buffer = adc_value;
-	AUXADCDisable();
+	adc_stop_sampling(data);
 
 	adc_context_on_sampling_done(&data->ctx, dev);
 }

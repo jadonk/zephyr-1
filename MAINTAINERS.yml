@@ -60,6 +60,34 @@
 #         Like 'files-regex', but any matching files will be excluded from the
 #         area.
 #
+#     file-groups:
+#         A list of groups of files that are treated as a single unit.
+#         This is useful for areas where different collaborators are responsible for
+#         different parts of the area.
+#
+#         File groups inherit file patterns from their parent area. A file will only
+#         match a file group if it first matches the parent area's patterns, and then
+#         also matches the file group's own patterns. This allows file groups to
+#         further filter and subdivide files that are already covered by the area.
+#
+#         Each group should have the following structure:
+#         - name: <group name>
+#           collaborators:
+#             - <GitHub handle>
+#             - <GitHub handle>
+#           files:
+#             - <file path>
+#             - <file path>
+#           files-regex:
+#             - <regex pattern>
+#             - <regex pattern>
+#           files-exclude:
+#             - <file path>
+#             - <file path>
+#           files-regex-exclude:
+#             - <regex pattern>
+#             - <regex pattern>
+#
 #     description: >-
 #         Plain-English description. Describe what the system is about, from an
 #         outsider's perspective.
@@ -748,6 +776,7 @@ Build system:
     - misc/empty_file.c
     - misc/generated/
     - snippets/
+    - scripts/schemas/snippet-schema.yaml
     - modules/Kconfig.sysbuild
     - scripts/list_boards.py
     - scripts/list_hardware.py
@@ -762,6 +791,8 @@ Build system:
     - scripts/schemas/soc-schema.yaml
     - scripts/list_shields.py
     - scripts/snippets.py
+    - scripts/tests/build/test_subfolder_list.py
+    - scripts/tests/build_helpers/test_domains.py
   files-exclude:
     - doc/build/dts/
   labels:
@@ -860,6 +891,7 @@ CPU Frequency Scaling:
     - include/zephyr/cpu_freq/
     - subsys/cpu_freq/
     - dts/bindings/p_state/
+    - doc/services/cpu_freq/
   labels:
     - "area: CPU Frequency Scaling"
 
@@ -871,6 +903,7 @@ CRC:
     - include/zephyr/sys/crc.h
     - subsys/crc/
     - tests/subsys/crc/
+    - doc/hardware/peripherals/crc.rst
   labels:
     - "area: CRC"
 
@@ -884,6 +917,7 @@ Cache:
     - doc/hardware/cache/index.rst
     - drivers/cache/
     - tests/kernel/cache/
+    - doc/hardware/cache/
   labels:
     - "area: Cache"
   tests:
@@ -928,6 +962,7 @@ Console:
   files:
     - include/zephyr/console/
     - subsys/console/
+    - doc/services/console.rst
   labels:
     - "area: Console"
   tests:
@@ -948,7 +983,8 @@ Continuous Integration:
     - scripts/make_bugs_pickle.py
     - .checkpatch.conf
     - scripts/gitlint/
-    - scripts/set_assignees.py
+    - scripts/ci/set_assignees.py
+    - scripts/footprint/
   labels:
     - "area: Continuous Integration"
 
@@ -1106,6 +1142,7 @@ Devicetree Bindings:
   files:
     - dts/bindings/
     - include/zephyr/dt-bindings/
+    - scripts/bindings_properties_allowlist.yaml
   labels:
     - "area: Devicetree Bindings"
 
@@ -1135,12 +1172,13 @@ Disk:
     - drivers.disk
 
 Display drivers:
-  status: odd fixes
+  status: maintained
+  maintainers:
+    - JarmouniA
   collaborators:
     - jfischer-no
     - danieldegrasse
     - VynDragon
-    - jarmouniA
   files:
     - drivers/display/
     - dts/bindings/display/
@@ -1202,6 +1240,7 @@ Documentation Infrastructure:
     - carlescufi
     - nashif
   files:
+    - doc/404.rst
     - doc/requirements.in
     - doc/requirements.txt
     - doc/_*/
@@ -2047,6 +2086,8 @@ Documentation Infrastructure:
   status: maintained
   maintainers:
     - rerickson1
+  collaborators:
+    - SeppoTakalo
   files:
     - drivers/modem/
     - tests/drivers/build_all/modem/
@@ -2499,6 +2540,7 @@ Documentation Infrastructure:
     - doc/services/virtualization/
     - include/zephyr/drivers/virtualization/ivshmem.h
     - samples/drivers/virtualization/
+    - doc/hardware/virtualization/
   labels:
     - "area: Virtualization"
   tests:
@@ -2512,6 +2554,7 @@ Documentation Infrastructure:
     - casparfriedrich
   files:
     - doc/hardware/peripherals/w1.rst
+    - doc/hardware/peripherals/1-Wire_bus_topology.drawio.svg
     - drivers/w1/
     - dts/bindings/w1/
     - include/zephyr/drivers/w1.h
@@ -2599,8 +2642,6 @@ Documentation Infrastructure:
     - wm-eisos
   files:
     - drivers/sensor/wsen/
-  labels:
-    - "area: Sensors"
   tests:
     - drivers.sensors
   description: >-
@@ -2920,6 +2961,7 @@ Instrumentation Subsystem:
     - fkokosinski
     - tgorochowik
   files:
+    - doc/services/instrumentation/
     - include/zephyr/instrumentation/
     - samples/subsys/instrumentation/
     - scripts/instrumentation/
@@ -3114,6 +3156,7 @@ Kernel:
     - tests/subsys/llext/
     - subsys/llext/
     - doc/services/llext/
+    - include/zephyr/linker/llext-sections.ld
   labels:
     - "area: llext"
   tests:
@@ -3264,7 +3307,7 @@ MAINTAINERS file:
   files:
     - MAINTAINERS.yml
     - scripts/get_maintainer.py
-    - scripts/set_assignees.py
+    - scripts/ci/set_assignees.py
     - scripts/check_maintainers.py
   labels:
     - "area: MAINTAINER File"
@@ -3392,6 +3435,8 @@ Modem:
   status: maintained
   maintainers:
     - bjarki-andreasen
+  collaborators:
+    - SeppoTakalo
   files:
     - subsys/modem/
     - include/zephyr/modem/
@@ -3915,6 +3960,7 @@ Networking:
     - samples/net/ocpp/
     - subsys/net/lib/ocpp/
     - tests/net/lib/ocpp/
+    - doc/connectivity/networking/api/ocpp.rst
   labels:
     - "area: OCPP"
 
@@ -3924,10 +3970,8 @@ Networking:
     - rlubos
   collaborators:
     - pdgendt
-    - canisLupus1313
     - kkasperczyk-no
     - edmont
-    - maciejbaczmanski
   files:
     - subsys/net/l2/openthread/
     - samples/net/openthread/
@@ -4323,6 +4367,22 @@ Realtek EC Platforms:
     - soc/realtek/ec/
   labels:
     - "platform: Realtek EC"
+
+Release:
+  status: maintained
+  maintainers:
+    - nashif
+  collaborators:
+    - kartben
+  files:
+    - VERSION
+    - scripts/dump_bugs_pickle.py
+    - SDK_VERSION
+    - LICENSE
+    - LICENSES/
+    - scripts/release/
+  labels:
+    - "Release"
 
 Release Notes:
   status: maintained
@@ -4746,10 +4806,10 @@ State machine framework:
   status: maintained
   maintainers:
     - sambhurst
+    - vlad-kulikov
   collaborators:
     - keith-zephyr
     - glenn-andrews
-    - vlad-kulikov
   files:
     - doc/services/smf/
     - include/zephyr/smf.h
@@ -4841,8 +4901,6 @@ TDK Sensors:
     - gjabouley-invn
   files:
     - drivers/sensor/tdk/
-  labels:
-    - "area: Sensors"
   tests:
     - drivers.sensors
 
@@ -5088,6 +5146,7 @@ USB:
     - jfischer-no
   collaborators:
     - tmon-nordic
+    - josuah
   files:
     - drivers/usb/
     - dts/bindings/usb/
@@ -5666,7 +5725,8 @@ West:
     - thaoluonguw
     - binhnguyen2434
     - nhutnguyenkc
-  files: []
+  files:
+    - modules/Kconfig.renesas
   labels:
     - "platform: Renesas"
 
@@ -5741,9 +5801,9 @@ West:
   status: maintained
   maintainers:
     - afontaine-invn
-  collaborators:
     - rbuisson-invn
     - gjabouley-invn
+  collaborators:
     - sriccardi-invn
   files:
     - modules/hal_tdk/Kconfig
@@ -5907,10 +5967,10 @@ West:
   maintainers:
     - d3zd3z
     - ceolin
-  collaborators:
-    - wearyzen
     - valeriosetti
     - tomi-font
+  collaborators:
+    - wearyzen
     - ithinuel
   files:
     - modules/mbedtls/
@@ -6009,10 +6069,8 @@ West:
     - rlubos
   collaborators:
     - pdgendt
-    - canisLupus1313
-    - mariuszpos
+    - kkasperczyk-no
     - edmont
-    - maciejbaczmanski
   files:
     - modules/openthread/
   labels:
@@ -6044,11 +6102,11 @@ West:
   status: maintained
   maintainers:
     - d3zd3z
+    - tomi-font
   collaborators:
     - Vge0rge
     - wearyzen
     - valeriosetti
-    - tomi-font
     - ithinuel
   files: []
   labels:
@@ -6063,29 +6121,15 @@ West:
   labels:
     - "area: Debugging"
 
-"West project: sof":
-  status: maintained
-  maintainers:
-    - kv2019i
-  collaborators:
-    - andyross
-    - nashif
-    - lyakh
-    - lgirdwood
-  files:
-    - modules/Kconfig.sof
-  labels:
-    - "area: Audio"
-
 "West project: tf-m-tests":
   status: maintained
   maintainers:
     - d3zd3z
+    - tomi-font
   collaborators:
     - Vge0rge
     - wearyzen
     - valeriosetti
-    - tomi-font
     - ithinuel
   files: []
   labels:
@@ -6131,11 +6175,11 @@ West:
   status: maintained
   maintainers:
     - d3zd3z
+    - tomi-font
   collaborators:
     - Vge0rge
     - wearyzen
     - valeriosetti
-    - tomi-font
     - ithinuel
   files:
     - modules/trusted-firmware-m/

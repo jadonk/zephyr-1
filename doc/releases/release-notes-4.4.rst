@@ -53,8 +53,23 @@ Removed APIs and options
 Deprecated APIs and options
 ===========================
 
+* Bluetooth
+
+  * Mesh
+
+    * The function :c:func:`bt_mesh_input_number` was deprecated. Applications should use
+      :c:func:`bt_mesh_input_numeric` instead.
+    * The callback :c:member:`output_number` in :c:struct:`bt_mesh_prov` structure was deprecated.
+      Applications should use :c:member:`output_numeric` callback instead.
+
 New APIs and options
 ====================
+
+* Bluetooth
+
+  * Host
+
+    * :c:func:`bt_gatt_cb_unregister` Added an API to unregister GATT callback handlers.
 
 ..
   Link to new APIs here, in a group if you think it's necessary, no need to get
@@ -64,6 +79,22 @@ New APIs and options
 
 .. zephyr-keep-sorted-start re(^\* \w)
 
+* Bluetooth
+
+  * Mesh
+
+    * :c:func:`bt_mesh_input_numeric` to provide provisioning numeric input OOB value.
+    * :c:member:`output_numeric` callback in :c:struct:`bt_mesh_prov` structure to
+      output numeric values during provisioning.
+
+  * Services
+
+    * Introduced Alert Notification Service (ANS) :kconfig:option:`CONFIG_BT_ANS`
+
+* Flash
+
+  * :dtcompatible:`jedec,mspi-nor` now allows MSPI configuration of read, write and
+    control commands separately via devicetree.
 
 .. zephyr-keep-sorted-stop
 
@@ -91,6 +122,8 @@ New Drivers
 
 New Samples
 ***********
+
+* :zephyr:code-sample:`ble_peripheral_ans`
 
 ..
   Same as above, this will also be recomputed at the time of the release.

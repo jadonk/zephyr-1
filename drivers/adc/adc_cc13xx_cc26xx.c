@@ -98,14 +98,10 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 		data->standby_disabled = true;
 	}
 #endif
-	LOG_DBG("ADC start: before AUXADCEnableSync (ref=0x%08x, smpl=%u)",
-		data->ref_source, data->sample_time);
-
 	AUXADCEnableSync(data->ref_source, data->sample_time, AUXADC_TRIGGER_MANUAL);
 
 	LOG_DBG("ADC start: after AUXADCEnableSync, before trigger");
 
-	k_busy_wait(20); /* HACK!!! */
 	AUXADCGenManualTrigger();
 
 	LOG_DBG("ADC start: after AUXADCGenManualTrigger");

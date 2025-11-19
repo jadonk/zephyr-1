@@ -98,7 +98,7 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 	LOG_DBG("ADC start: before AUXADCEnableSync (ref=0x%08x, smpl=%u)",
 		data->ref_source, data->sample_time);
 
-	k_busy_wait(200); // HACK!!!
+	//k_busy_wait(1000); // HACK!!!
 
 	AUXADCEnableSync(data->ref_source, data->sample_time, AUXADC_TRIGGER_MANUAL);
 

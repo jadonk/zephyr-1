@@ -33,7 +33,6 @@ LOG_MODULE_REGISTER(adc_cc13xx_cc26xx);
 #endif
 
 #define ADC_CONTEXT_USES_KERNEL_TIMER
-#define ADC_CONTEXT_WAIT_FOR_COMPLETION_TIMEOUT K_MSEC(2)
 #include "adc_context.h"
 
 

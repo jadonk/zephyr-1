@@ -88,8 +88,6 @@ static void adc_cc13xx_cc26xx_isr(const struct device *dev);
 
 static void adc_context_start_sampling(struct adc_context *ctx)
 {
-	uint32_t evflags = HWREG(AUX_EVCTL_BASE + AUX_EVCTL_O_EVTOMCUFLAGS);
-	uint32_t adcctl = HWREG(AUX_ANAIF_BASE + AUX_ANAIF_O_ADCCTL);
 	struct adc_cc13xx_cc26xx_data *data =
 		CONTAINER_OF(ctx, struct adc_cc13xx_cc26xx_data, ctx);
 
@@ -101,10 +99,14 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 		data->standby_disabled = true;
 	}
 #endif
+	LOG_DBG("ADC start: before AUXADCEnableSync (ref=0x%08x, smpl=%u)",
+		data->ref_source, data->sample_time);
+
 	AUXADCEnableSync(data->ref_source, data->sample_time, AUXADC_TRIGGER_MANUAL);
 
 	LOG_DBG("ADC start: after AUXADCEnableSync, before trigger");
 
+	k_busy_wait(20); /* HACK!!! */
 	AUXADCGenManualTrigger();
 
 	LOG_DBG("ADC start: after AUXADCGenManualTrigger");
